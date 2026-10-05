@@ -1,0 +1,49 @@
+name: sevenbyeleven
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sevenbyeleven
+      POSTGRES_DB: sevenbyeleven
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/init-env.py first}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U sevenbyeleven -d sevenbyeleven]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  app:
+    build: .
+    image: sevenbyeleven:local
+    environment:
+      DATABASE_URL: postgresql://sevenbyeleven:${POSTGRES_PASSWORD}@postgres:5432/sevenbyeleven
+      SEED_DEMO: ${SEED_DEMO:-true}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-7by11Demo!2026}
+      PAYMENT_MODE: ${PAYMENT_MODE:-demo}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+    depends_on:
+      postgres: {condition: service_healthy}
+    ports: ['127.0.0.1:3000:3000']
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:3000/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+  proxy:
+    profiles: [domain]
+    image: caddy:2.10-alpine
+    ports: ['80:80', '443:443']
+    volumes: ['./deploy/Caddyfile:/etc/caddy/Caddyfile:ro','caddy-data:/data','caddy-config:/config']
+    depends_on: [app]
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

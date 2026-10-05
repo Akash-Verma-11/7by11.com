@@ -1,0 +1,14 @@
+# FUTURE DOMAIN: this entire site block is intentionally commented for local testing.
+# After DNS points to the server, uncomment the block, including braces and directives.
+# Start with: docker compose --profile domain up -d
+# Caddy obtains and renews a certificate; inbound ports 80 and 443 must reach this server.
+
+# 7by11.com {
+#     encode zstd gzip
+#     reverse_proxy app:3000
+#     header Strict-Transport-Security "max-age=31536000"
+# }
+
+# www.7by11.com {
+#     redir https://7by11.com{uri} permanent
+# }

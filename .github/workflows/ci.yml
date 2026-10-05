@@ -1,0 +1,44 @@
+name: Test and build 7by11
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: pip install -r requirements-dev.txt
+      - run: python -m compileall -q app scripts tests
+      - run: node --check web/app.js
+      - run: npm ci
+      - run: npm run test:ui
+      - run: python -m pytest -q
+      - run: python -m pytest -q
+        env:
+          DATABASE_URL: postgresql://test:test-only@localhost:5432/test
+      - run: python scripts/init-env.py
+      - run: docker compose up --build -d --wait --wait-timeout 180
+      - run: python scripts/smoke.py
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: sevenbyeleven:local
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - if: failure()
+        run: docker compose logs --tail=100
+      - if: always()
+        run: docker compose down -v

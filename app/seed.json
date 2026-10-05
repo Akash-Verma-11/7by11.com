@@ -1,0 +1,8 @@
+[
+ {"id":"p1","name":"Studio Wireless Headphones","category":"Electronics","price":249900,"mrp":399900,"image":"headphones.jpg","stock":30,"attributes":{"color":"Black","warranty":"1 year"}},
+ {"id":"p2","name":"Everyday Canvas Backpack","category":"Fashion","price":129900,"mrp":199900,"image":"backpack.jpg","stock":40,"attributes":{"material":"Canvas","capacity":"22 L"}},
+ {"id":"p3","name":"Minimal Ceramic Mug","category":"Home","price":49900,"mrp":79900,"image":"mug.jpg","stock":50,"attributes":{"capacity":"350 ml","material":"Ceramic"}},
+ {"id":"p4","name":"Stride Everyday Sneakers","category":"Fashion","price":189900,"mrp":299900,"image":"shoes.jpg","stock":25,"attributes":{"size":"UK 8","color":"White"}},
+ {"id":"p5","name":"Mechanical Desk Keyboard","category":"Electronics","price":349900,"mrp":499900,"image":"keyboard.jpg","stock":20,"attributes":{"connection":"USB-C","switch":"Tactile"}},
+ {"id":"p6","name":"Indoor Plant & Ceramic Pot","category":"Home","price":69900,"mrp":99900,"image":"plant.jpg","stock":35,"attributes":{"care":"Indirect sunlight","height":"30 cm"}}
+]

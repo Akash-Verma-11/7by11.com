@@ -1,0 +1,12 @@
+{
+  "name": "sevenbyeleven-marketplace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional DOM integration tests; no Node runtime required by the application",
+  "scripts": {
+    "test:ui": "node tests/ui-smoke.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

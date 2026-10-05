@@ -1,0 +1,55 @@
+# Package file inventory
+
+All paths are relative to the application folder. No runtime database, personal .env, virtual environment or node_modules are shipped. Install dependencies using START_HERE.md.
+
+- `.dockerignore`
+- `.env.example`
+- `.github/workflows/ci.yml`
+- `.gitignore`
+- `Dockerfile`
+- `Jenkinsfile`
+- `LICENSE`
+- `NOTICE.md`
+- `README.md`
+- `START_HERE.md`
+- `app/__init__.py`
+- `app/accounts.py`
+- `app/catalog.py`
+- `app/commerce.py`
+- `app/core.py`
+- `app/db.py`
+- `app/operations.py`
+- `app/schema.sql`
+- `app/seed.json`
+- `compose.yaml`
+- `deploy/Caddyfile`
+- `docs/7by11_Complete_Deployment_Guide.docx`
+- `docs/API.md`
+- `docs/CONFIG.md`
+- `docs/DATA.md`
+- `docs/FEATURES.md`
+- `docs/GUIDE.md`
+- `docs/VERIFICATION.md`
+- `package-lock.json`
+- `package.json`
+- `pytest.ini`
+- `requirements-dev.txt`
+- `requirements.txt`
+- `run.py`
+- `scripts/backup.sh`
+- `scripts/init-env.py`
+- `scripts/manage.py`
+- `scripts/restore.sh`
+- `scripts/run-local.py`
+- `scripts/smoke.py`
+- `scripts/start.ps1`
+- `scripts/start.sh`
+- `tests/test_marketplace.py`
+- `tests/ui-smoke.cjs`
+- `web/app.js`
+- `web/assets/favicon.svg`
+- `web/assets/products.png`
+- `web/index.html`
+- `web/style.css`
+- `FILE_INVENTORY.md`
+- `SHA256SUMS.txt`
