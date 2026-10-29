@@ -1,0 +1,61 @@
+/* SevenByEleven — category discovery */
+
+.category-discovery {
+  margin: 36px 0;
+}
+
+.category-discovery h2 {
+  margin-bottom: 18px;
+}
+
+.category-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.category-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 25px;
+  border: 1px solid #e2e9e2;
+  border-radius: 18px;
+  background: #f5f8f2;
+  text-align: left;
+  transition: transform .2s, box-shadow .2s;
+}
+
+.category-tile:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 28px rgba(20,55,45,.08);
+}
+
+.category-tile .symbol {
+  font-size: 30px;
+}
+
+.category-tile strong {
+  font-size: 19px;
+}
+
+.category-tile small {
+  color: #687b75;
+}
+
+@media(max-width:600px) {
+  .category-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .category-tile {
+    padding: 19px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .category-tile {
+    transition: none;
+  }
+}
