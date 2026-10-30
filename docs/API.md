@@ -32,7 +32,7 @@ Responses: 200 success, 201 created, 401 sign in required, 403 forbidden, 404 ab
 | `PATCH /api/seller/stores/<id>` | Signed in; ownership checked in handler | description, name |
 | `GET, POST /api/seller/stores/<id>/members` | Signed in; ownership checked in handler | email, permission |
 | `GET, POST /api/seller/products` | Signed in; ownership checked in handler | attributes, brand, category, description, mrp, name, price, sku, stock, store_id |
-| `PATCH /api/seller/products/<id>` | Signed in; ownership checked in handler | description, mrp, name, price, status, version |
+| `PATCH /api/seller/products/<id>` | Signed in; ownership checked in handler | attributes, brand, category, description, mrp, name, price, sku, status, version |
 | `POST /api/seller/products/<id>/stock` | Signed in; ownership checked in handler | delta, reason, version |
 | `POST /api/seller/products/<id>/image` | Signed in; ownership checked in handler | None / see notes |
 | `GET /api/media/<id>` | Public | None / see notes |
@@ -76,7 +76,7 @@ Responses: 200 success, 201 created, 401 sign in required, 403 forbidden, 404 ab
 
 ## Special request rules
 
-GET /api/products accepts q, category, sort (new, price_asc, price_desc), page starting at 1, and optional store_id; 24 records per page. A store_id filters products to that store. Inactive stores and unavailable products are excluded. GET /api/stores lists active stores; GET /api/stores/<id> returns the public profile of an active store or 404 if unavailable. Product create categories are Electronics, Fashion and Home. Product image upload uses multipart/form-data with field image, rather than JSON. DELETE address uses its path ID. POST notifications marks all your notifications read. Stock delta is signed; version is required for product and stock updates.
+GET /api/products accepts q, category, sort (new, price_asc, price_desc), page starting at 1, and optional store_id; 24 records per page. A store_id filters products to that store. Inactive stores and unavailable products are excluded. GET /api/stores lists active stores; GET /api/stores/<id> returns the public profile of an active store or 404 if unavailable. Product create categories are Electronics, Fashion and Home. Product image upload uses multipart/form-data with field image, rather than JSON. DELETE address uses its path ID. POST notifications marks all your notifications read. Product updates require the current version. SKU is unique within a store; category must be Electronics, Fashion or Home; attributes must be a JSON object up to 2,000 serialized characters. Changes to name, brand, category, description or attributes return moderation to pending. Price, MRP and SKU changes do not by themselves require reapproval. Stock delta is signed; version is required for product and stock updates.
 
 Checkout requires Idempotency-Key with 8–100 characters, address with 10–500 characters, method demo or cod, optional coupon and items containing id/quantity/price. Build items from GET /api/cart in its returned order (product ID ascending). Send an unchanged key and payload only to retry the same checkout. A new intent needs a new key. Do not generate another key after a network timeout without checking your Orders first.
 

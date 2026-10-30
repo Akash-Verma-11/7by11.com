@@ -5,7 +5,7 @@
 | Area | Available behavior |
 |---|---|
 | Customer | Register, login, password change, addresses, search/category/sort, product details, public seller storefronts and store-specific product browsing, wishlist, cart, coupon checkout, split seller order lines, order status, cancellation before packing, delivery code, whole-line returns, verified reviews, support tickets and notifications |
-| Seller | Apply for store approval; manage own stores; draft products, submit for moderation, activate approved listings, delist/archive, edit price and descriptions, upload sanitized images, adjust stock with reason and version check, pack own orders, receive returns and record demo refunds, scoped store staff, earnings and payout requests |
+| Seller | Apply for store approval; manage own stores; draft products, submit for moderation, activate approved listings, delist/archive, edit product name, SKU, brand, category, description, attributes, price and MRP, upload sanitized images, adjust stock with reason and version check, pack own orders, receive returns and record demo refunds, scoped store staff, earnings and payout requests |
 | Admin | Approve/suspend/reject stores; approve/suppress/reject products; suspend accounts; moderate reviews; create coupons; assign delivery persons; inspect orders and audit log; review demo payouts |
 | Delivery | Assigned tasks only, necessary delivery address, start delivery, log failed attempt, validate customer delivery code, record COD collection and complete delivery |
 | Warehouse | Shared packing queue, return receipt and quality disposition; this pilot allows warehouse staff to record the related simulated refund |

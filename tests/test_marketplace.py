@@ -351,3 +351,81 @@ def test_storefront_respects_product_and_store_visibility(app):
         )
 
     assert call(app, '/products?store_id=store-1').json == []
+
+
+# Phase 3.3: complete seller product editing
+
+def test_seller_can_edit_complete_product_listing(app):
+    seller = login(app, 'seller')
+
+    changes = {
+        'version': 1,
+        'name': 'Studio Pro Wireless Headphones',
+        'sku': 'P1-PRO',
+        'brand': 'Studio Audio',
+        'category': 'Electronics',
+        'description': 'Premium wireless headphones for everyday listening.',
+        'attributes': {
+            'color': 'Midnight Black',
+            'warranty': '2 years',
+            'connection': 'Bluetooth'
+        }
+    }
+
+    response = call(app, '/seller/products/p1', 'patch', changes, seller)
+    assert response.status_code == 200, response.json
+
+    with transaction() as db:
+        product = db.one("SELECT * FROM products WHERE id='p1'")
+
+    assert product['name'] == changes['name']
+    assert product['sku'] == changes['sku']
+    assert product['brand'] == changes['brand']
+    assert product['category'] == changes['category']
+    assert product['description'] == changes['description']
+    assert json.loads(product['attributes']) == changes['attributes']
+    assert product['moderation'] == 'pending'
+    assert product['version'] == 2
+
+
+def test_seller_cannot_use_duplicate_sku_in_same_store(app):
+    seller = login(app, 'seller')
+
+    response = call(
+        app,
+        '/seller/products/p1',
+        'patch',
+        {'version': 1, 'sku': 'P2'},
+        seller
+    )
+
+    assert response.status_code == 409
+
+    with transaction() as db:
+        product = db.one("SELECT sku FROM products WHERE id='p1'")
+
+    assert product['sku'] == 'P1'
+
+
+@pytest.mark.parametrize(
+    ('changes', 'description'),
+    [
+        ({'category': 'InvalidCategory'}, 'invalid category'),
+        ({'attributes': ['not', 'an', 'object']}, 'non-object attributes'),
+        ({'attributes': {'details': 'x' * 2001}}, 'oversized attributes')
+    ]
+)
+def test_seller_product_editor_rejects_invalid_fields(app, changes, description):
+    seller = login(app, 'seller')
+
+    response = call(
+        app,
+        '/seller/products/p1',
+        'patch',
+        {'version': 1, **changes},
+        seller
+    )
+
+    assert response.status_code == 422, (
+        f'{description}: {response.status_code} {response.json}'
+    )

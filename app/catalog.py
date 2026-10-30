@@ -103,15 +103,64 @@ def update_product(id):
     b=body()
     with transaction(True) as db:
         p=product_access(db,id)
-        if integer(b.get('version'),'version',1)!=p['version']:fail('This product changed. Refresh before editing.',409)
-        price=integer(b.get('price',p['price']),'price',1);mrp=integer(b.get('mrp',p['mrp']),'MRP',price)
+        if integer(b.get('version'),'version',1)!=p['version']:
+            fail('This product changed. Refresh before editing.',409)
+
+        price=integer(b.get('price',p['price']),'price',1)
+        mrp=integer(b.get('mrp',p['mrp']),'MRP',price)
         status=b.get('status',p['status'])
-        if status not in ('draft','active','paused','archived'):fail('Invalid listing status')
-        if status=='active' and p['moderation']!='approved':fail('Admin approval is required before activation',409)
-        name=text(b.get('name',p['name']),'name',3,150);description=text(b.get('description',p['description']),'description',5,2000)
-        moderation='pending' if name!=p['name'] or description!=p['description'] else p['moderation']
-        db.execute('UPDATE products SET name=?,description=?,price=?,mrp=?,status=?,moderation=?,version=version+1 WHERE id=?',(name,description,price,mrp,status,moderation,id));audit(db,g.user['id'],'product.edit',id,json.dumps({'old_price':p['price'],'new_price':price,'status':status}))
+
+        if status not in ('draft','active','paused','archived'):
+            fail('Invalid listing status')
+        if status=='active' and p['moderation']!='approved':
+            fail('Admin approval is required before activation',409)
+
+        name=text(b.get('name',p['name']),'name',3,150)
+        brand=text(b.get('brand',p['brand']),'brand',1,100)
+        category=b.get('category',p['category'])
+        if category not in ('Electronics','Fashion','Home'):
+            fail('Invalid category')
+
+        description=text(b.get('description',p['description']),'description',5,2000)
+        attrs=b.get('attributes',json.loads(p['attributes']))
+
+        if not isinstance(attrs,dict) or len(json.dumps(attrs))>2000:
+            fail('Invalid attributes')
+
+        attributes=json.dumps(attrs)
+        sku=text(b.get('sku',p['sku']),'SKU',1,80)
+
+        duplicate=db.one(
+            'SELECT id FROM products WHERE store_id=? AND sku=? AND id<>?',
+            (p['store_id'],sku,id)
+        )
+        if duplicate:
+            fail('SKU already exists in this store',409)
+
+        details_changed=(
+            name!=p['name']
+            or brand!=p['brand']
+            or category!=p['category']
+            or description!=p['description']
+            or attributes!=p['attributes']
+        )
+        moderation='pending' if details_changed else p['moderation']
+
+        db.execute(
+            "UPDATE products SET name=?,brand=?,category=?,description=?,attributes=?,sku=?,price=?,mrp=?,status=?,moderation=?,version=version+1 WHERE id=?",
+            (name,brand,category,description,attributes,sku,price,mrp,status,moderation,id)
+        )
+
+        audit(
+            db,g.user['id'],'product.edit',id,
+            json.dumps({
+                'old_price':p['price'],
+                'new_price':price,
+                'status':status
+            })
+        )
     return {'ok':True}
+
 
 @bp.post('/api/seller/products/<id>/stock')
 @auth()

@@ -124,6 +124,42 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    d.querySelector('#checkout-form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
    await until(()=>d.querySelector('.order'),'placed order');
   }
+  if(role==='seller'){
+   const edit=d.querySelector('[data-edit-product="p1"]');
+   if(!edit)throw Error('Seller product edit button missing');
+
+   edit.click();
+   await until(()=>d.querySelector('#action-form'),'complete product editor');
+
+   const form=d.querySelector('#action-form');
+   const fields=['name','sku','brand','category','price','mrp','description','attributes'];
+
+   for(const name of fields){
+    if(!form.querySelector(`[name="${name}"]`))
+     throw Error('Missing product editor field: '+name);
+   }
+
+   form.querySelector('[name=name]').value='Studio Editor Test Headphones';
+   form.querySelector('[name=sku]').value='P1-UI-EDIT';
+   form.querySelector('[name=brand]').value='Studio Audio';
+   form.querySelector('[name=category]').value='Electronics';
+   form.querySelector('[name=description]').value='Updated through seller editor UI testing.';
+   form.querySelector('[name=attributes]').value=JSON.stringify({
+    color:'Graphite',
+    warranty:'2 years',
+    connection:'Bluetooth'
+   });
+
+   form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+
+   await until(
+    ()=>d.querySelector('#workspace-content')?.textContent.includes('Studio Editor Test Headphones'),
+    'saved seller product changes'
+   );
+
+   console.log('PASS seller product editor: all listing fields saved');
+  }
+
   if(d.querySelector('#main').textContent.includes('Unexpected server error'))throw Error(role+' workspace failed');
   console.log('PASS UI DOM:',role);
   d.querySelector('#account').click();await until(()=>d.querySelector('#account').textContent==='Sign in','logout');await delay(100);
