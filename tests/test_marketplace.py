@@ -192,3 +192,106 @@ def test_login_throttle_is_persistent(app):
     for _ in range(10):
         assert call(app,'/login','post',{'email':'customer@example.com','password':'wrong'}).status_code==401
     assert call(app,'/login','post',{'email':'customer@example.com','password':'7by11Demo!2026'}).status_code==429
+
+
+# Phase 3.1: public catalog behavior
+
+def test_catalog_search_by_name_brand_and_description(app):
+    by_name = call(app, '/products?q=headphones').json
+    assert [p['id'] for p in by_name] == ['p1']
+
+    by_brand = call(app, '/products?q=7by11+select').json
+    assert len(by_brand) == 6
+
+    by_description = call(app, '/products?q=simple+returns').json
+    assert len(by_description) == 6
+
+
+def test_catalog_category_and_price_sorting(app):
+    fashion = call(app, '/products?category=Fashion').json
+    assert {p['id'] for p in fashion} == {'p2', 'p4'}
+
+    ascending = call(app, '/products?sort=price_asc').json
+    assert [p['id'] for p in ascending] == [
+        'p3', 'p6', 'p2', 'p4', 'p1', 'p5'
+    ]
+
+    descending = call(app, '/products?sort=price_desc').json
+    assert [p['id'] for p in descending] == [
+        'p5', 'p1', 'p4', 'p2', 'p6', 'p3'
+    ]
+
+
+def test_catalog_excludes_paused_products(app):
+    with transaction(True) as db:
+        db.execute("UPDATE products SET status='paused' WHERE id='p1'")
+
+    visible = {p['id'] for p in call(app, '/products').json}
+    assert 'p1' not in visible
+
+
+def test_catalog_excludes_unapproved_products(app):
+    with transaction(True) as db:
+        db.execute(
+            "UPDATE products SET moderation='pending' WHERE id='p2'"
+        )
+
+    visible = {p['id'] for p in call(app, '/products').json}
+    assert 'p2' not in visible
+
+
+def test_catalog_excludes_products_from_inactive_stores(app):
+    with transaction(True) as db:
+        product = db.one("SELECT store_id FROM products WHERE id='p3'")
+        db.execute(
+            "UPDATE stores SET status='suspended' WHERE id=?",
+            (product['store_id'],)
+        )
+
+    visible = {p['id'] for p in call(app, '/products').json}
+    assert 'p3' not in visible
+
+
+def test_catalog_pagination_returns_all_products_without_duplicates(app):
+    with transaction(True) as db:
+        base = db.one("SELECT * FROM products WHERE id='p1'")
+
+        for i in range(19):
+            number = i + 1
+            db.execute(
+                """INSERT INTO products
+                (id, store_id, name, category, brand, description,
+                 attributes, sku, price, mrp, stock, status, moderation,
+                 image, version, created)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    f'page-{number:02d}',
+                    base['store_id'],
+                    f'Pagination Fixture {number:02d}',
+                    'Home',
+                    'Pagination Test',
+                    'A fixture product for testing catalog pages.',
+                    '{}',
+                    f'PAGE-{number:02d}',
+                    10000 + number,
+                    15000 + number,
+                    5,
+                    'active',
+                    'approved',
+                    'p3',
+                    1,
+                    base['created'] + number
+                )
+            )
+
+    first = call(app, '/products?page=1').json
+    second = call(app, '/products?page=2').json
+
+    assert len(first) == 24
+    assert len(second) == 1
+
+    first_ids = {p['id'] for p in first}
+    second_ids = {p['id'] for p in second}
+
+    assert first_ids.isdisjoint(second_ids)
+    assert len(first_ids | second_ids) == 25

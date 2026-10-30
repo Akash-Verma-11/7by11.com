@@ -13,7 +13,7 @@ def products():
     except ValueError: fail('Invalid page')
     sql="SELECT p.*,s.name AS store_name FROM products p JOIN stores s ON p.store_id=s.id WHERE p.status='active' AND p.moderation='approved' AND s.status='active'"
     args=[]
-    if term:sql+=' AND (LOWER(p.name) LIKE ? OR LOWER(p.brand) LIKE ?)';args+=['%'+term+'%']*2
+    if term:sql+=' AND (LOWER(p.name) LIKE ? OR LOWER(p.brand) LIKE ? OR LOWER(p.description) LIKE ?)';args+=['%'+term+'%']*3
     if category:sql+=' AND p.category=?';args.append(category)
     sql+=' ORDER BY '+{'price_asc':'p.price ASC','price_desc':'p.price DESC','new':'p.created DESC,p.id'}.get(sort,'p.created DESC,p.id')+' LIMIT 24 OFFSET ?';args.append((page-1)*24)
     with transaction() as db:return [unpack(p) for p in db.all(sql,args)]
