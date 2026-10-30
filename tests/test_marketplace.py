@@ -295,3 +295,59 @@ def test_catalog_pagination_returns_all_products_without_duplicates(app):
 
     assert first_ids.isdisjoint(second_ids)
     assert len(first_ids | second_ids) == 25
+
+
+# Phase 3.2: public seller storefronts
+
+def test_public_store_profile_and_visibility(app):
+    store = call(app, '/stores/store-1')
+
+    assert store.status_code == 200
+    assert store.json['id'] == 'store-1'
+    assert store.json['name'] == 'Everyday Studio'
+    assert store.json['description'] == (
+        'Thoughtful essentials, selected for everyday life.'
+    )
+
+    assert call(app, '/stores/unknown-store').status_code == 404
+
+    with transaction(True) as db:
+        db.execute(
+            "UPDATE stores SET status='suspended' WHERE id='store-2'"
+        )
+
+    assert call(app, '/stores/store-2').status_code == 404
+
+
+def test_public_products_are_scoped_to_the_requested_store(app):
+    store_one = call(app, '/products?store_id=store-1')
+    store_two = call(app, '/products?store_id=store-2')
+
+    assert store_one.status_code == 200
+    assert {p['id'] for p in store_one.json} == {
+        'p1', 'p2', 'p4', 'p5'
+    }
+
+    assert store_two.status_code == 200
+    assert {p['id'] for p in store_two.json} == {'p3', 'p6'}
+
+    assert call(app, '/products?store_id=unknown-store').json == []
+
+
+def test_storefront_respects_product_and_store_visibility(app):
+    with transaction(True) as db:
+        db.execute("UPDATE products SET status='paused' WHERE id='p1'")
+        db.execute(
+            "UPDATE products SET moderation='pending' WHERE id='p2'"
+        )
+
+    visible = call(app, '/products?store_id=store-1').json
+
+    assert {p['id'] for p in visible} == {'p4', 'p5'}
+
+    with transaction(True) as db:
+        db.execute(
+            "UPDATE stores SET status='suspended' WHERE id='store-1'"
+        )
+
+    assert call(app, '/products?store_id=store-1').json == []

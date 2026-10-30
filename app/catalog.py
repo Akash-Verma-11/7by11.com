@@ -8,13 +8,14 @@ def unpack(p):
 
 @bp.get('/api/products')
 def products():
-    term=request.args.get('q','').lower()[:100];category=request.args.get('category','');sort=request.args.get('sort','new')
+    term=request.args.get('q','').lower()[:100];category=request.args.get('category','');sort=request.args.get('sort','new');store_id=request.args.get('store_id','')
     try: page=max(1,int(request.args.get('page','1')))
     except ValueError: fail('Invalid page')
     sql="SELECT p.*,s.name AS store_name FROM products p JOIN stores s ON p.store_id=s.id WHERE p.status='active' AND p.moderation='approved' AND s.status='active'"
     args=[]
     if term:sql+=' AND (LOWER(p.name) LIKE ? OR LOWER(p.brand) LIKE ? OR LOWER(p.description) LIKE ?)';args+=['%'+term+'%']*3
     if category:sql+=' AND p.category=?';args.append(category)
+    if store_id:sql+=' AND p.store_id=?';args.append(store_id)
     sql+=' ORDER BY '+{'price_asc':'p.price ASC','price_desc':'p.price DESC','new':'p.created DESC,p.id'}.get(sort,'p.created DESC,p.id')+' LIMIT 24 OFFSET ?';args.append((page-1)*24)
     with transaction() as db:return [unpack(p) for p in db.all(sql,args)]
 
@@ -152,3 +153,13 @@ def media(id):
 @bp.get('/api/stores')
 def public_stores():
     with transaction() as db:return db.all("SELECT id,name,description FROM stores WHERE status='active'")
+
+@bp.get('/api/stores/<id>')
+def public_store(id):
+    with transaction() as db:
+        store=db.one(
+            "SELECT id,name,description FROM stores WHERE id=? AND status='active'",
+            (id,)
+        )
+        if not store:fail('Store is unavailable',404)
+        return store

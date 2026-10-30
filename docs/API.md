@@ -24,7 +24,7 @@ Responses: 200 success, 201 created, 401 sign in required, 403 forbidden, 404 ab
 
 | Method and path | Access | JSON request fields read by handler |
 |---|---|---|
-| `GET /api/products` | Public | None / see notes |
+| `GET /api/products` | Public | q, category, sort, page, store_id |
 | `GET /api/products/<id>` | Public | None / see notes |
 | `GET, POST /api/wishlist` | Signed in; ownership checked in handler | product_id, remove |
 | `POST /api/products/<id>/reviews` | customer, seller | body, rating |
@@ -37,6 +37,7 @@ Responses: 200 success, 201 created, 401 sign in required, 403 forbidden, 404 ab
 | `POST /api/seller/products/<id>/image` | Signed in; ownership checked in handler | None / see notes |
 | `GET /api/media/<id>` | Public | None / see notes |
 | `GET /api/stores` | Public | None / see notes |
+| `GET /api/stores/<id>` | Public | None / see notes |
 
 ## Commerce
 
@@ -75,7 +76,7 @@ Responses: 200 success, 201 created, 401 sign in required, 403 forbidden, 404 ab
 
 ## Special request rules
 
-GET /api/products accepts q, category, sort (new, price_asc, price_desc), and page starting at 1; 24 records per page. Product create categories are Electronics, Fashion and Home. Product image upload uses multipart/form-data with field image, rather than JSON. DELETE address uses its path ID. POST notifications marks all your notifications read. Stock delta is signed; version is required for product and stock updates.
+GET /api/products accepts q, category, sort (new, price_asc, price_desc), page starting at 1, and optional store_id; 24 records per page. A store_id filters products to that store. Inactive stores and unavailable products are excluded. GET /api/stores lists active stores; GET /api/stores/<id> returns the public profile of an active store or 404 if unavailable. Product create categories are Electronics, Fashion and Home. Product image upload uses multipart/form-data with field image, rather than JSON. DELETE address uses its path ID. POST notifications marks all your notifications read. Stock delta is signed; version is required for product and stock updates.
 
 Checkout requires Idempotency-Key with 8–100 characters, address with 10–500 characters, method demo or cod, optional coupon and items containing id/quantity/price. Build items from GET /api/cart in its returned order (product ID ascending). Send an unchanged key and payload only to retry the same checkout. A new intent needs a new key. Do not generate another key after a network timeout without checking your Orders first.
 

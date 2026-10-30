@@ -267,3 +267,38 @@ main {
     width: 100%;
   }
 }
+
+/* Phase 3.2 — Public seller storefront */
+
+button.store-link {
+  border: 0;
+  padding: 0;
+  min-height: 0;
+  color: #376b55;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button.store-link:hover {
+  background: transparent;
+  color: var(--green);
+}
+
+.storefront-header {
+  padding: 28px;
+  margin-bottom: 28px;
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.storefront-header h1 {
+  margin: 14px 0 10px;
+}
+
+.storefront-header p {
+  max-width: 640px;
+  color: var(--muted);
+}
