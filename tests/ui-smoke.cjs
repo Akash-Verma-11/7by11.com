@@ -158,6 +158,55 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    );
 
    console.log('PASS seller product editor: all listing fields saved');
+
+   // Inventory status and stock movement history.
+   const stockButton=d.querySelector('[data-stock="p1"]');
+   const historyButton=d.querySelector('[data-stock-history="p1"]');
+
+   if(!stockButton || !historyButton)
+    throw Error('Seller inventory controls missing');
+
+   const currentStock=Number(stockButton.dataset.currentStock);
+
+   if(!Number.isInteger(currentStock) || currentStock<0)
+    throw Error('Invalid current stock value: '+stockButton.dataset.currentStock);
+
+   const adjustment=5-currentStock;
+
+   stockButton.click();
+   await until(()=>d.querySelector('#action-form'),'stock adjustment form');
+
+   const stockForm=d.querySelector('#action-form');
+   stockForm.querySelector('[name=delta]').value=String(adjustment);
+   stockForm.querySelector('[name=reason]').value='UI inventory test adjustment';
+
+   stockForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+
+   await until(
+    ()=>d.querySelector('#workspace-content')?.textContent.includes('Low stock'),
+    'low stock indicator'
+   );
+
+   console.log('PASS seller inventory: low stock indicator at 5 units');
+
+   const history=d.querySelector('[data-stock-history="p1"]');
+   history.click();
+
+   await until(
+    ()=>d.querySelector('#modal').open
+      && d.querySelector('#modal').textContent.includes('Stock movement history'),
+    'stock movement history modal'
+   );
+
+   const historyText=d.querySelector('#modal').textContent;
+
+   if(!historyText.includes('UI inventory test adjustment'))
+    throw Error('Stock history reason was not displayed');
+
+   if(!historyText.includes('Everyday Studio'))
+    throw Error('Stock history actor was not displayed');
+
+   console.log('PASS seller inventory: stock history shows reason and actor');
   }
 
   if(d.querySelector('#main').textContent.includes('Unexpected server error'))throw Error(role+' workspace failed');

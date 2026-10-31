@@ -429,3 +429,99 @@ def test_seller_product_editor_rejects_invalid_fields(app, changes, description)
     assert response.status_code == 422, (
         f'{description}: {response.status_code} {response.json}'
     )
+
+
+# Phase 3.4: inventory movement history and protection
+
+def test_stock_history_records_adjustments_and_checks_permissions(app):
+    seller = login(app, 'seller')
+
+    adjustment = call(
+        app,
+        '/seller/products/p1/stock',
+        'post',
+        {'delta': -3, 'reason': 'Damaged stock during inspection', 'version': 1},
+        seller
+    )
+    assert adjustment.status_code == 200, adjustment.json
+
+    history = call(
+        app,
+        '/seller/products/p1/stock-moves',
+        headers=seller
+    )
+    assert history.status_code == 200, history.json
+    assert len(history.json) == 1
+
+    movement = history.json[0]
+    assert movement['delta'] == -3
+    assert movement['reason'] == 'Damaged stock during inspection'
+    assert movement['actor_name'] == 'Everyday Studio'
+
+    assert call(
+        app,
+        '/seller/products/p1/stock-moves',
+        headers=login(app, 'seller2')
+    ).status_code == 403
+
+    assert call(
+        app,
+        '/seller/stores/store-1/members',
+        'post',
+        {'email': 'customer@example.com', 'permission': 'catalog'},
+        seller
+    ).status_code == 200
+
+    assert call(
+        app,
+        '/seller/products/p1/stock-moves',
+        headers=login(app, 'customer')
+    ).status_code == 403
+
+    assert call(
+        app,
+        '/seller/products/unknown/stock-moves',
+        headers=seller
+    ).status_code == 404
+
+
+def test_stock_adjustment_rejects_stale_version_and_negative_inventory(app):
+    seller = login(app, 'seller')
+
+    first = call(
+        app,
+        '/seller/products/p1/stock',
+        'post',
+        {'delta': -3, 'reason': 'Inspection adjustment', 'version': 1},
+        seller
+    )
+    assert first.status_code == 200
+
+    stale = call(
+        app,
+        '/seller/products/p1/stock',
+        'post',
+        {'delta': 1, 'reason': 'Stale adjustment', 'version': 1},
+        seller
+    )
+    assert stale.status_code == 409
+
+    insufficient = call(
+        app,
+        '/seller/products/p1/stock',
+        'post',
+        {'delta': -100, 'reason': 'Excess removal attempt', 'version': 2},
+        seller
+    )
+    assert insufficient.status_code == 409
+
+    with transaction() as db:
+        product = db.one("SELECT stock,version FROM products WHERE id='p1'")
+        movements = db.all(
+            "SELECT delta,reason FROM stock_moves WHERE product_id='p1'"
+        )
+
+    assert product['stock'] == 27
+    assert product['version'] == 2
+    assert len(movements) == 1
+    assert movements[0]['delta'] == -3

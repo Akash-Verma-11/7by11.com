@@ -5,7 +5,7 @@
 | Area | Available behavior |
 |---|---|
 | Customer | Register, login, password change, addresses, search/category/sort, product details, public seller storefronts and store-specific product browsing, wishlist, cart, coupon checkout, split seller order lines, order status, cancellation before packing, delivery code, whole-line returns, verified reviews, support tickets and notifications |
-| Seller | Apply for store approval; manage own stores; draft products, submit for moderation, activate approved listings, delist/archive, edit product name, SKU, brand, category, description, attributes, price and MRP, upload sanitized images, adjust stock with reason and version check, pack own orders, receive returns and record demo refunds, scoped store staff, earnings and payout requests |
+| Seller | Apply for store approval; manage own stores; draft products, submit for moderation, activate approved listings, delist/archive, edit product name, SKU, brand, category, description, attributes, price and MRP, upload sanitized images, adjust stock with reason and version check, view the latest 100 recorded stock movements with actor/reason/timestamp, see out-of-stock and low-stock indicators, pack own orders, receive returns and record demo refunds, scoped store staff, earnings and payout requests |
 | Admin | Approve/suspend/reject stores; approve/suppress/reject products; suspend accounts; moderate reviews; create coupons; assign delivery persons; inspect orders and audit log; review demo payouts |
 | Delivery | Assigned tasks only, necessary delivery address, start delivery, log failed attempt, validate customer delivery code, record COD collection and complete delivery |
 | Warehouse | Shared packing queue, return receipt and quality disposition; this pilot allows warehouse staff to record the related simulated refund |
@@ -17,6 +17,8 @@
 ## Simulations and simplified policies
 
 Checkout accepts `demo` or `cod`, but both are lab records. It does not contact a payment gateway. COD collection is a checkbox, not a reconciled cash ledger. Refunds and payouts change local records only. The receipt is not a compliant tax invoice. Delivery is assigned manually, without carrier API, maps or live GPS. Notifications are in-app only. Seller earnings use an illustrative fixed 90% of each delivered discounted line, reversed on refund; this is not double-entry accounting. Do not interpret these records as bank balances.
+
+Inventory history contains recorded movements only; initial seed quantities are not backfilled. The seller workspace marks zero units as out of stock and one to five units as low stock. These are informational indicators, not automated alerts or reorder rules. The history view is limited to the latest 100 movements.
 
 Returns cover the complete purchased line quantity, with physical receipt before refund and restock/quarantine choice. There is no automated return deadline or exchange workflow. Cancellation is allowed only while confirmed. Coupons are once per customer and are not automatically released after cancellation. A product is a seller-owned offer with a SKU and attributes; shared catalog variants, multiple offers per canonical product and a buy-box are not implemented.
 

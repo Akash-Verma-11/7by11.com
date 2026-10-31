@@ -173,6 +173,29 @@ def update_stock(id):
         audit(db,g.user['id'],'stock.adjust',id)
     return {'ok':True}
 
+
+@bp.get('/api/seller/products/<id>/stock-moves')
+@auth()
+def stock_history(id):
+    with transaction() as db:
+        product_access(db, id, 'fulfillment')
+        return db.all(
+            """
+            SELECT
+                sm.id,
+                sm.delta,
+                sm.reason,
+                sm.created,
+                u.name AS actor_name
+            FROM stock_moves sm
+            LEFT JOIN users u ON u.id = sm.actor
+            WHERE sm.product_id = ?
+            ORDER BY sm.created DESC, sm.id DESC
+            LIMIT 100
+            """,
+            (id,)
+        )
+
 @bp.post('/api/seller/products/<id>/image')
 @auth()
 def upload(id):
