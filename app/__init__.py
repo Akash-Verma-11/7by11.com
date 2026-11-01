@@ -37,7 +37,7 @@ def create_app():
     def health(): return {'status':'ok','brand':'7by11'}
     @app.get('/ready')
     def ready():
-        with transaction() as db: db.one('SELECT version FROM migrations WHERE version=1')
+        with transaction() as db: db.one('SELECT version FROM migrations WHERE version=2')
         return {'status':'ready'}
     @app.get('/metrics')
     def metrics(): return 'sevenbyeleven_up 1\n',200,{'Content-Type':'text/plain'}

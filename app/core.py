@@ -67,6 +67,11 @@ def seed_database():
         for statement in Path(__file__).with_name('schema.sql').read_text().split(';'):
             if statement.strip(): db.execute(statement)
         db.execute('INSERT INTO migrations VALUES(1,?) ON CONFLICT(version) DO NOTHING',(now(),))
+        if not db.one('SELECT version FROM migrations WHERE version=2'):
+            db.execute(
+                'ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER NOT NULL DEFAULT 5 CHECK(low_stock_threshold BETWEEN 0 AND 100000)'
+            )
+            db.execute('INSERT INTO migrations VALUES(2,?)',(now(),))
         if os.getenv('SEED_DEMO','true').lower()!='true': return
         password=os.getenv('DEMO_PASSWORD','7by11Demo!2026')
         for role,name in [('customer','Akash'),('seller','Everyday Studio'),('seller2','Home Collective'),('admin','Marketplace Admin'),('delivery','Delivery Partner'),('warehouse','Warehouse Team'),('support','Customer Care'),('finance','Finance Team')]:
@@ -76,5 +81,15 @@ def seed_database():
         products=json.loads((Path(__file__).parent/'seed.json').read_text())
         for index,p in enumerate(products):
             sid='store-2' if index in (2,5) else 'store-1'
-            db.execute('INSERT INTO products VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',(p['id'],sid,p['name'],p['category'],'7by11 Select','Everyday essentials with clear pricing and simple returns.',json.dumps(p['attributes']),p['id'].upper(),p['price'],p['mrp'],p['stock'],'active','approved',p['id'],1,now()))
+            db.execute(
+                "INSERT INTO products "
+                "(id,store_id,name,category,brand,description,attributes,sku,"
+                "price,mrp,stock,status,moderation,image,version,created) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO NOTHING",
+                (p['id'],sid,p['name'],p['category'],'7by11 Select',
+                 'Everyday essentials with clear pricing and simple returns.',
+                 json.dumps(p['attributes']),p['id'].upper(),p['price'],
+                 p['mrp'],p['stock'],'active','approved',p['id'],1,now())
+            )
         db.execute('INSERT INTO coupons VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING',('WELCOME10',10,50000,100000,10000,0,1,now()+365*86400))

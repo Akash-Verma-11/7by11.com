@@ -132,7 +132,7 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    await until(()=>d.querySelector('#action-form'),'complete product editor');
 
    const form=d.querySelector('#action-form');
-   const fields=['name','sku','brand','category','price','mrp','description','attributes'];
+   const fields=['name','sku','brand','category','price','mrp','description','attributes','low_stock_threshold'];
 
    for(const name of fields){
     if(!form.querySelector(`[name="${name}"]`))
@@ -144,6 +144,7 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    form.querySelector('[name=brand]').value='Studio Audio';
    form.querySelector('[name=category]').value='Electronics';
    form.querySelector('[name=description]').value='Updated through seller editor UI testing.';
+   form.querySelector('[name=low_stock_threshold]').value='40';
    form.querySelector('[name=attributes]').value=JSON.stringify({
     color:'Graphite',
     warranty:'2 years',
@@ -157,7 +158,13 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
     'saved seller product changes'
    );
 
-   console.log('PASS seller product editor: all listing fields saved');
+   console.log('PASS seller product editor: all listing fields and threshold saved');
+
+   const inventoryRow=d.querySelector('[data-stock="p1"]')?.closest('.order-item');
+   if(!inventoryRow?.textContent.includes('Low stock'))
+    throw Error('Configured low-stock threshold was not reflected in seller catalog');
+
+   console.log('PASS seller inventory: configurable threshold controls low-stock badge');
 
    // Inventory status and stock movement history.
    const stockButton=d.querySelector('[data-stock="p1"]');
@@ -183,8 +190,9 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    stockForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
 
    await until(
-    ()=>d.querySelector('#workspace-content')?.textContent.includes('Low stock'),
-    'low stock indicator'
+    ()=>Number(d.querySelector('[data-stock="p1"]')?.dataset.currentStock)===5
+      && d.querySelector('#workspace-content')?.textContent.includes('Low stock'),
+    'stock adjustment saved and low stock indicator'
    );
 
    console.log('PASS seller inventory: low stock indicator at 5 units');
@@ -194,8 +202,9 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
 
    await until(
     ()=>d.querySelector('#modal').open
-      && d.querySelector('#modal').textContent.includes('Stock movement history'),
-    'stock movement history modal'
+      && d.querySelector('#modal').textContent.includes('Stock movement history')
+      && d.querySelector('#modal').textContent.includes('UI inventory test adjustment'),
+    'stock movement history response and adjustment reason'
    );
 
    const historyText=d.querySelector('#modal').textContent;
@@ -207,6 +216,57 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
     throw Error('Stock history actor was not displayed');
 
    console.log('PASS seller inventory: stock history shows reason and actor');
+
+   const historyFilter=d.querySelector('#stock-history-filter');
+   if(!historyFilter)throw Error('Stock history filters missing');
+
+   historyFilter.querySelector('[name=type]').value='removed';
+   historyFilter.querySelector('[name=reason]').value='UI inventory test adjustment';
+
+   const previousFilter=historyFilter;
+   historyFilter.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+
+   await until(
+    ()=>d.querySelector('#stock-history-filter')
+      && d.querySelector('#stock-history-filter')!==previousFilter,
+    'filtered stock history response'
+   );
+
+   const filteredRows=d.querySelectorAll('#modal tbody tr');
+   if(filteredRows.length!==1)
+    throw Error('Expected one filtered stock movement, got '+filteredRows.length);
+
+   const filteredText=filteredRows[0].textContent;
+   if(!filteredText.includes('Removed') ||
+      !filteredText.includes('UI inventory test adjustment'))
+    throw Error('Movement type or reason filter did not work');
+
+   d.querySelector('#close-modal').click();
+   await until(()=>!d.querySelector('#modal').open,'close stock history modal');
+
+   const inventoryTab=d.querySelector('[data-tab="inventory"]');
+   if(!inventoryTab){
+    const tabs=Array.from(d.querySelectorAll('[data-tab]')).map(b=>b.dataset.tab);
+    throw Error('Inventory tab missing; available tabs: '+tabs.join(', '));
+   }
+   inventoryTab.click();
+
+   await until(
+    ()=>d.querySelector('#workspace-content')?.textContent.includes('Inventory report'),
+    'seller inventory dashboard'
+   );
+
+   const reportText=d.querySelector('#workspace-content').textContent;
+   if(!reportText.includes('Total units') || !reportText.includes('Low stock')
+      || !reportText.includes('Out of stock'))
+    throw Error('Inventory summary cards are missing');
+
+   if(!d.querySelector('#workspace-content table tbody tr'))
+    throw Error('Inventory report contains no product rows');
+
+   console.log('PASS seller inventory: filtered history and inventory dashboard');
+   d.querySelector('[data-tab=catalog]').click();
+   await until(()=>d.querySelector('[data-edit-product="p1"]'),'return to catalog');
   }
 
   if(d.querySelector('#main').textContent.includes('Unexpected server error'))throw Error(role+' workspace failed');

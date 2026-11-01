@@ -525,3 +525,249 @@ def test_stock_adjustment_rejects_stale_version_and_negative_inventory(app):
     assert product['version'] == 2
     assert len(movements) == 1
     assert movements[0]['delta'] == -3
+
+
+# Phase 3.5: configurable inventory thresholds
+
+def test_inventory_threshold_migration_defaults_existing_products_to_five(app):
+    with transaction() as db:
+        migration = db.one(
+            "SELECT version FROM migrations WHERE version=2"
+        )
+        product = db.one(
+            "SELECT stock,low_stock_threshold FROM products WHERE id='p1'"
+        )
+
+    assert migration is not None
+    assert product['low_stock_threshold'] == 5
+
+
+def test_seller_can_update_inventory_threshold_with_version_check(app):
+    seller = login(app, 'seller')
+
+    updated = call(
+        app,
+        '/seller/products/p1',
+        'patch',
+        {'low_stock_threshold': 12, 'version': 1},
+        seller
+    )
+    assert updated.status_code == 200, updated.json
+
+    with transaction() as db:
+        product = db.one(
+            "SELECT low_stock_threshold,version FROM products WHERE id='p1'"
+        )
+
+    assert product['low_stock_threshold'] == 12
+    assert product['version'] == 2
+
+    stale = call(
+        app,
+        '/seller/products/p1',
+        'patch',
+        {'low_stock_threshold': 8, 'version': 1},
+        seller
+    )
+    assert stale.status_code == 409
+
+    disabled = call(
+        app,
+        '/seller/products/p1',
+        'patch',
+        {'low_stock_threshold': 0, 'version': 2},
+        seller
+    )
+    assert disabled.status_code == 200
+
+    with transaction() as db:
+        product = db.one(
+            "SELECT low_stock_threshold,version FROM products WHERE id='p1'"
+        )
+
+    assert product['low_stock_threshold'] == 0
+    assert product['version'] == 3
+
+
+def test_inventory_threshold_rejects_invalid_values_and_other_store_access(app):
+    seller = login(app, 'seller')
+
+    for value in (-1, 100001, 1.5, '5', None):
+        response = call(
+            app,
+            '/seller/products/p1',
+            'patch',
+            {'low_stock_threshold': value, 'version': 1},
+            seller
+        )
+        assert response.status_code == 422, (value, response.json)
+
+    other_store = call(
+        app,
+        '/seller/products/p3',
+        'patch',
+        {'low_stock_threshold': 10, 'version': 1},
+        seller
+    )
+    assert other_store.status_code == 403
+
+
+# Phase 3.5: inventory history filters and inventory reports
+
+def test_stock_history_filters_type_reason_and_date_range(app):
+    from datetime import datetime, timezone
+
+    seller = login(app, 'seller')
+    movements = [
+        (2, 'Supplier restock north'),
+        (-1, 'Damaged carton'),
+        (3, 'Supplier restock south')
+    ]
+
+    version = 1
+    for delta, reason in movements:
+        response = call(
+            app,
+            '/seller/products/p1/stock',
+            'post',
+            {'delta': delta, 'reason': reason, 'version': version},
+            seller
+        )
+        assert response.status_code == 200, response.json
+        version += 1
+
+    base = '/seller/products/p1/stock-moves'
+
+    added = call(app, base + '?type=added', headers=seller)
+    assert added.status_code == 200
+    assert len(added.json) == 2
+    assert all(m['delta'] > 0 for m in added.json)
+
+    removed = call(app, base + '?type=removed', headers=seller)
+    assert removed.status_code == 200
+    assert len(removed.json) == 1
+    assert removed.json[0]['delta'] == -1
+
+    reason = call(app, base + '?reason=Supplier', headers=seller)
+    assert reason.status_code == 200
+    assert len(reason.json) == 2
+
+    date_range = call(
+        app,
+        base + '?from=2000-01-01&to=2099-12-31',
+        headers=seller
+    )
+    assert date_range.status_code == 200
+    assert len(date_range.json) == 3
+
+    future = call(
+        app,
+        base + '?from=2099-01-01',
+        headers=seller
+    )
+    assert future.status_code == 200
+    assert future.json == []
+
+    assert call(
+        app,
+        base + '?type=invalid',
+        headers=seller
+    ).status_code == 422
+
+    assert call(
+        app,
+        base + '?from=not-a-date',
+        headers=seller
+    ).status_code == 422
+
+    assert call(
+        app,
+        base + '?from=2027-01-01&to=2026-01-01',
+        headers=seller
+    ).status_code == 422
+
+
+def test_inventory_summary_reports_status_and_store_scope(app):
+    seller = login(app, 'seller')
+
+    with transaction(True) as db:
+        db.execute(
+            "UPDATE products SET stock=4,low_stock_threshold=5 WHERE id='p1'"
+        )
+        db.execute(
+            "UPDATE products SET stock=0 WHERE id='p2'"
+        )
+
+    response = call(
+        app,
+        '/seller/inventory-summary',
+        headers=seller
+    )
+    assert response.status_code == 200, response.json
+
+    report = response.json
+    products = {p['id']: p for p in report['products']}
+
+    assert report['product_count'] == 4
+    assert products['p1']['inventory_status'] == 'low_stock'
+    assert products['p2']['inventory_status'] == 'out_of_stock'
+    assert report['low_stock_count'] >= 1
+    assert report['out_of_stock_count'] >= 1
+    assert report['total_units'] == sum(
+        p['stock'] for p in report['products']
+    )
+
+    # A seller must not see another store's inventory.
+    seller2 = login(app, 'seller2')
+    other = call(
+        app,
+        '/seller/inventory-summary',
+        headers=seller2
+    )
+    assert other.status_code == 200
+    assert all(p['store_name'] == 'Home Collective' for p in other.json['products'])
+    assert all(p['id'] not in ('p1', 'p2') for p in other.json['products'])
+
+
+def test_inventory_summary_respects_disabled_low_stock_threshold(app):
+    seller = login(app, 'seller')
+
+    with transaction(True) as db:
+        db.execute(
+            "UPDATE products SET stock=4,low_stock_threshold=0 WHERE id='p1'"
+        )
+
+    response = call(
+        app,
+        '/seller/inventory-summary',
+        headers=seller
+    )
+    assert response.status_code == 200
+
+    p1 = next(p for p in response.json['products'] if p['id'] == 'p1')
+    assert p1['inventory_status'] == 'in_stock'
+
+
+def test_public_product_responses_hide_seller_inventory_threshold(app):
+    customer = login(app, 'customer')
+    seller = login(app, 'seller')
+
+    catalog = call(app, '/products')
+    product = next(p for p in catalog.json if p['id'] == 'p1')
+    assert 'low_stock_threshold' not in product
+
+    detail = call(app, '/products/p1')
+    assert detail.status_code == 200
+    assert 'low_stock_threshold' not in detail.json
+
+    saved = call(
+        app, '/wishlist', 'post', {'product_id': 'p1'}, customer
+    )
+    assert saved.status_code == 200
+
+    wishlist = call(app, '/wishlist', headers=customer)
+    assert 'low_stock_threshold' not in wishlist.json[0]
+
+    seller_products = call(app, '/seller/products', headers=seller)
+    seller_product = next(p for p in seller_products.json if p['id'] == 'p1')
+    assert seller_product['low_stock_threshold'] == 5

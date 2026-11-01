@@ -1,10 +1,14 @@
 import base64, csv, io
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint,g,request,Response
 from .core import *
 bp=Blueprint('catalog',__name__)
 
-def unpack(p):
-    p['attributes']=json.loads(p['attributes']);return p
+def unpack(p, public=False):
+    p['attributes'] = json.loads(p['attributes'])
+    if public:
+        p.pop('low_stock_threshold', None)
+    return p
 
 @bp.get('/api/products')
 def products():
@@ -17,21 +21,21 @@ def products():
     if category:sql+=' AND p.category=?';args.append(category)
     if store_id:sql+=' AND p.store_id=?';args.append(store_id)
     sql+=' ORDER BY '+{'price_asc':'p.price ASC','price_desc':'p.price DESC','new':'p.created DESC,p.id'}.get(sort,'p.created DESC,p.id')+' LIMIT 24 OFFSET ?';args.append((page-1)*24)
-    with transaction() as db:return [unpack(p) for p in db.all(sql,args)]
+    with transaction() as db:return [unpack(p, public=True) for p in db.all(sql,args)]
 
 @bp.get('/api/products/<id>')
 def product(id):
     with transaction() as db:
         p=db.one("SELECT p.*,s.name AS store_name FROM products p JOIN stores s ON p.store_id=s.id WHERE p.id=? AND p.status='active' AND p.moderation='approved' AND s.status='active'",(id,))
         if not p:fail('Product is unavailable',404)
-        p=unpack(p);p['reviews']=db.all("SELECT r.rating,r.body,u.name FROM reviews r JOIN users u ON r.user_id=u.id WHERE r.product_id=? AND r.status='approved' ORDER BY r.created DESC LIMIT 100",(id,))
+        p=unpack(p, public=True);p['reviews']=db.all("SELECT r.rating,r.body,u.name FROM reviews r JOIN users u ON r.user_id=u.id WHERE r.product_id=? AND r.status='approved' ORDER BY r.created DESC LIMIT 100",(id,))
         return p
 
 @bp.route('/api/wishlist',methods=['GET','POST'])
 @auth()
 def wishlist():
     with transaction(request.method=='POST') as db:
-        if request.method=='GET':return [unpack(p) for p in db.all('SELECT p.* FROM products p JOIN wishlist w ON p.id=w.product_id WHERE w.user_id=?',(g.user['id'],))]
+        if request.method=='GET':return [unpack(p, public=True) for p in db.all('SELECT p.* FROM products p JOIN wishlist w ON p.id=w.product_id WHERE w.user_id=?',(g.user['id'],))]
         b=body();pid=text(b.get('product_id'),'product')
         if not db.one('SELECT id FROM products WHERE id=?',(pid,)):fail('Product not found',404)
         if b.get('remove'):db.execute('DELETE FROM wishlist WHERE user_id=? AND product_id=?',(g.user['id'],pid))
@@ -93,7 +97,18 @@ def seller_products():
         if not isinstance(attrs,dict) or len(json.dumps(attrs))>2000:fail('Invalid attributes')
         sku=text(b.get('sku'),'SKU',1,80)
         if db.one('SELECT id FROM products WHERE store_id=? AND sku=?',(sid,sku)):fail('SKU already exists in this store',409)
-        id=uid('p-');db.execute('INSERT INTO products VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(id,sid,text(b.get('name'),'name',3,150),category,text(b.get('brand','Independent'),'brand',1,100),text(b.get('description'),'description',5,2000),json.dumps(attrs),sku,price,mrp,quantity,'draft','pending','p3',1,now()))
+        id=uid('p-')
+        db.execute(
+            "INSERT INTO products "
+            "(id,store_id,name,category,brand,description,attributes,sku,"
+            "price,mrp,stock,status,moderation,image,version,created) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (id,sid,text(b.get('name'),'name',3,150),category,
+             text(b.get('brand','Independent'),'brand',1,100),
+             text(b.get('description'),'description',5,2000),
+             json.dumps(attrs),sku,price,mrp,quantity,'draft','pending',
+             'p3',1,now())
+        )
         db.execute('INSERT INTO stock_moves VALUES(?,?,?,?,?,?)',(uid(),id,quantity,'initial stock',g.user['id'],now()));audit(db,g.user['id'],'product.create',id)
         return {'id':id},201
 
@@ -129,6 +144,12 @@ def update_product(id):
 
         attributes=json.dumps(attrs)
         sku=text(b.get('sku',p['sku']),'SKU',1,80)
+        low_stock_threshold=integer(
+            b.get('low_stock_threshold',p['low_stock_threshold']),
+            'low stock threshold',
+            0,
+            100000
+        )
 
         duplicate=db.one(
             'SELECT id FROM products WHERE store_id=? AND sku=? AND id<>?',
@@ -147,8 +168,8 @@ def update_product(id):
         moderation='pending' if details_changed else p['moderation']
 
         db.execute(
-            "UPDATE products SET name=?,brand=?,category=?,description=?,attributes=?,sku=?,price=?,mrp=?,status=?,moderation=?,version=version+1 WHERE id=?",
-            (name,brand,category,description,attributes,sku,price,mrp,status,moderation,id)
+            "UPDATE products SET name=?,brand=?,category=?,description=?,attributes=?,sku=?,price=?,mrp=?,status=?,moderation=?,low_stock_threshold=?,version=version+1 WHERE id=?",
+            (name,brand,category,description,attributes,sku,price,mrp,status,moderation,low_stock_threshold,id)
         )
 
         audit(
@@ -156,7 +177,9 @@ def update_product(id):
             json.dumps({
                 'old_price':p['price'],
                 'new_price':price,
-                'status':status
+                'status':status,
+                'old_low_stock_threshold':p['low_stock_threshold'],
+                'new_low_stock_threshold':low_stock_threshold
             })
         )
     return {'ok':True}
@@ -177,24 +200,131 @@ def update_stock(id):
 @bp.get('/api/seller/products/<id>/stock-moves')
 @auth()
 def stock_history(id):
+    movement_type = request.args.get('type', '').strip().lower()
+    if movement_type not in ('', 'added', 'removed'):
+        fail('Invalid movement type')
+
+    reason = request.args.get('reason', '').strip()
+    if len(reason) > 100:
+        fail('Reason filter is too long')
+
+    clauses = ['sm.product_id=?']
+    args = [id]
+
+    if movement_type == 'added':
+        clauses.append('sm.delta>0')
+    elif movement_type == 'removed':
+        clauses.append('sm.delta<0')
+
+    if reason:
+        clauses.append('LOWER(sm.reason) LIKE ?')
+        args.append('%' + reason.lower() + '%')
+
+    from_date = request.args.get('from', '').strip()
+    to_date = request.args.get('to', '').strip()
+
+    start_timestamp = None
+    end_timestamp = None
+
+    if from_date:
+        try:
+            parsed = datetime.strptime(from_date, '%Y-%m-%d')
+            if parsed.strftime('%Y-%m-%d') != from_date:
+                fail('Invalid start date; use YYYY-MM-DD')
+            start_timestamp = int(
+                parsed.replace(tzinfo=timezone.utc).timestamp()
+            )
+        except ValueError:
+            fail('Invalid start date; use YYYY-MM-DD')
+
+    if to_date:
+        try:
+            parsed = datetime.strptime(to_date, '%Y-%m-%d')
+            if parsed.strftime('%Y-%m-%d') != to_date:
+                fail('Invalid end date; use YYYY-MM-DD')
+            end_timestamp = int(
+                (parsed.replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp()
+            )
+        except ValueError:
+            fail('Invalid end date; use YYYY-MM-DD')
+
+    if start_timestamp is not None and end_timestamp is not None:
+        if start_timestamp >= end_timestamp:
+            fail('Start date must not be after end date')
+
+    if start_timestamp is not None:
+        clauses.append('sm.created>=?')
+        args.append(start_timestamp)
+
+    if end_timestamp is not None:
+        clauses.append('sm.created<?')
+        args.append(end_timestamp)
+
     with transaction() as db:
         product_access(db, id, 'fulfillment')
         return db.all(
             """
-            SELECT
-                sm.id,
-                sm.delta,
-                sm.reason,
-                sm.created,
-                u.name AS actor_name
+            SELECT sm.id, sm.delta, sm.reason, sm.created,
+                   u.name AS actor_name
             FROM stock_moves sm
-            LEFT JOIN users u ON u.id = sm.actor
-            WHERE sm.product_id = ?
+            LEFT JOIN users u ON u.id=sm.actor
+            WHERE """ + ' AND '.join(clauses) + """
             ORDER BY sm.created DESC, sm.id DESC
             LIMIT 100
             """,
-            (id,)
+            args
         )
+
+
+@bp.get('/api/seller/inventory-summary')
+@auth()
+def inventory_summary():
+    with transaction() as db:
+        products = db.all(
+            """
+            SELECT p.id, p.store_id, s.name AS store_name,
+                   p.name, p.sku, p.stock, p.low_stock_threshold,
+                   p.status, p.moderation, p.version
+            FROM products p
+            JOIN stores s ON s.id=p.store_id
+            LEFT JOIN members m
+              ON m.store_id=s.id AND m.user_id=?
+            WHERE s.owner_id=?
+               OR (m.user_id=? AND m.permission='fulfillment')
+            ORDER BY s.name, p.name, p.id
+            """,
+            (g.user['id'], g.user['id'], g.user['id'])
+        )
+
+        if not products:
+            fail('Seller inventory access required', 403)
+
+    total_units = 0
+    low_stock_count = 0
+    out_of_stock_count = 0
+
+    for product in products:
+        stock_level = product['stock']
+        threshold = product['low_stock_threshold']
+        total_units += stock_level
+
+        if stock_level == 0:
+            product['inventory_status'] = 'out_of_stock'
+            out_of_stock_count += 1
+        elif threshold > 0 and stock_level <= threshold:
+            product['inventory_status'] = 'low_stock'
+            low_stock_count += 1
+        else:
+            product['inventory_status'] = 'in_stock'
+
+    return {
+        'product_count': len(products),
+        'total_units': total_units,
+        'low_stock_count': low_stock_count,
+        'out_of_stock_count': out_of_stock_count,
+        'products': products
+    }
+
 
 @bp.post('/api/seller/products/<id>/image')
 @auth()
