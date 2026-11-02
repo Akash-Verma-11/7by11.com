@@ -11,6 +11,130 @@ def order_view(db,id,user=None):
     o['items']=db.all('SELECT id,product_id,store_id,name,quantity,price,total,status,courier_id,cod_collected FROM order_items WHERE order_id=? ORDER BY id',(id,))
     return o
 
+
+@bp.get('/api/items/<id>/tracking')
+@auth('customer', 'seller')
+def item_tracking(id):
+    with transaction() as db:
+        item = db.one(
+            """
+            SELECT i.*, o.user_id, u.name AS buyer_name
+            FROM order_items i
+            JOIN orders o ON o.id = i.order_id
+            JOIN users u ON u.id = o.user_id
+            WHERE i.id = ?
+            """,
+            (id,)
+        )
+
+        if not item:
+            fail('Item not found', 404)
+
+        if item['user_id'] != g.user['id']:
+            if g.user['role'] == 'customer':
+                fail('Item not found', 404)
+            store_access(db, item['store_id'], 'fulfillment')
+
+        audit_rows = db.all(
+            """
+            SELECT
+                a.id,
+                a.action,
+                a.detail,
+                a.created,
+                COALESCE(u.name, 'System') AS actor_name
+            FROM audit a
+            LEFT JOIN users u ON u.id = a.actor
+            WHERE
+                (
+                    a.entity = ?
+                    AND a.action IN (
+                        'cancel.demo',
+                        'item.pack',
+                        'delivery.start',
+                        'delivery.attempt_failed',
+                        'delivery.complete',
+                        'return.request'
+                    )
+                )
+                OR
+                (
+                    a.entity IN (
+                        SELECT r.id FROM returns r WHERE r.item_id = ?
+                    )
+                    AND a.action IN ('return.receive', 'return.refund')
+                )
+            """,
+            (id, id)
+        )
+
+        status_by_action = {
+            'cancel.demo': 'cancelled',
+            'item.pack': 'packed',
+            'delivery.start': 'out_for_delivery',
+            'delivery.attempt_failed': 'out_for_delivery',
+            'delivery.complete': 'delivered',
+            'return.request': 'return_requested',
+            'return.receive': 'return_received',
+            'return.refund': 'refunded',
+        }
+
+        event_rank = {
+            'order.confirmed': 0,
+            'cancel.demo': 1,
+            'item.pack': 1,
+            'delivery.start': 2,
+            'delivery.attempt_failed': 3,
+            'delivery.complete': 4,
+            'return.request': 5,
+            'return.receive': 6,
+            'return.refund': 7,
+        }
+
+        events = [{
+            'event': 'order.confirmed',
+            'status': 'confirmed',
+            'actor_name': item['buyer_name'],
+            'created': item['created'],
+            'detail': 'Order confirmed',
+            '_rank': event_rank['order.confirmed'],
+            '_id': '',
+        }]
+
+        for row in audit_rows:
+            status = status_by_action.get(row['action'])
+            if status is None:
+                continue
+
+            events.append({
+                'event': row['action'],
+                'status': status,
+                'actor_name': row['actor_name'],
+                'created': row['created'],
+                'detail': row['detail'],
+                '_rank': event_rank[row['action']],
+                '_id': row['id'],
+            })
+
+        # Timestamps have second-level precision. The rank keeps lifecycle
+        # events in their logical order when multiple actions share a second.
+        events.sort(key=lambda event: (
+            event['created'],
+            event['_rank'],
+            event['_id']
+        ))
+
+        for event in events:
+            event.pop('_rank')
+            event.pop('_id')
+
+        return {
+            'item_id': id,
+            'status': item['status'],
+            'events': events,
+        }
+
+
 @bp.route('/api/cart',methods=['GET','POST'])
 @auth('customer','seller')
 def cart():

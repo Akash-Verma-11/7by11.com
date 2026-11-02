@@ -771,3 +771,153 @@ def test_public_product_responses_hide_seller_inventory_threshold(app):
     seller_products = call(app, '/seller/products', headers=seller)
     seller_product = next(p for p in seller_products.json if p['id'] == 'p1')
     assert seller_product['low_stock_threshold'] == 5
+
+# Phase 3.6: unified order-item tracking timeline
+def test_order_item_tracking_covers_complete_fulfillment_and_return(app):
+    customer = login(app)
+    order, _ = buy(app, customer)
+    assert order.status_code == 201, order.json
+    item_id = order.json['items'][0]['id']
+
+    initial = call(app, '/items/' + item_id + '/tracking', headers=customer)
+    assert initial.status_code == 200, initial.json
+    assert [e['event'] for e in initial.json['events']] == ['order.confirmed']
+
+    fulfill(app, item_id, customer)
+
+    requested = call(
+        app, '/items/' + item_id + '/return', 'post',
+        {'reason': 'Changed my mind'}, customer
+    )
+    assert requested.status_code == 200, requested.json
+
+    seller = login(app, 'seller')
+    returns = call(app, '/seller/returns', headers=seller)
+    assert returns.status_code == 200, returns.json
+    return_id = next(r['id'] for r in returns.json if r['item_id'] == item_id)
+
+    received = call(
+        app, '/returns/' + return_id + '/resolve', 'post',
+        {'action': 'receive'}, seller
+    )
+    assert received.status_code == 200, received.json
+
+    refunded = call(
+        app, '/returns/' + return_id + '/resolve', 'post',
+        {'action': 'refund', 'disposition': 'restock'}, seller
+    )
+    assert refunded.status_code == 200, refunded.json
+
+    response = call(app, '/items/' + item_id + '/tracking', headers=customer)
+    assert response.status_code == 200, response.json
+    events = response.json['events']
+
+    assert [e['event'] for e in events] == [
+        'order.confirmed',
+        'item.pack',
+        'delivery.start',
+        'delivery.complete',
+        'return.request',
+        'return.receive',
+        'return.refund',
+    ]
+    assert events[-1]['status'] == 'refunded'
+    for event in events:
+        assert event['created']
+        assert event['actor_name']
+        assert event['status']
+
+
+def test_order_item_tracking_enforces_customer_and_seller_access(app):
+    customer = login(app)
+    order, _ = buy(app, customer)
+    item_id = order.json['items'][0]['id']
+
+    registered = call(
+        app, '/register', 'post',
+        {
+            'email': 'customer2@example.com',
+            'name': 'Second Customer',
+            'password': 'StrongPass1234'
+        }
+    )
+    assert registered.status_code == 201, registered.json
+
+    outsider_login = call(
+        app, '/login', 'post',
+        {
+            'email': 'customer2@example.com',
+            'password': 'StrongPass1234'
+        }
+    )
+    assert outsider_login.status_code == 200, outsider_login.json
+    outsider = {'Authorization': 'Bearer ' + outsider_login.json['token']}
+    assert call(
+        app, '/items/' + item_id + '/tracking', headers=outsider
+    ).status_code == 404
+
+    seller = login(app, 'seller')
+    assert call(
+        app, '/items/' + item_id + '/tracking', headers=seller
+    ).status_code == 200
+
+    seller2 = login(app, 'seller2')
+    assert call(
+        app, '/items/' + item_id + '/tracking', headers=seller2
+    ).status_code == 403
+
+    assert call(
+        app, '/items/unknown-item/tracking', headers=customer
+    ).status_code == 404
+
+
+def test_order_item_tracking_respects_fulfillment_membership(app):
+    customer = login(app)
+    order, _ = buy(app, customer)
+    item_id = order.json['items'][0]['id']
+
+    seller = login(app, 'seller')
+    seller2 = login(app, 'seller2')
+
+    membership = call(
+        app, '/seller/stores/store-1/members', 'post',
+        {'email': 'seller2@example.com', 'permission': 'catalog'}, seller
+    )
+    assert membership.status_code == 200, membership.json
+
+    assert call(
+        app, '/items/' + item_id + '/tracking', headers=seller2
+    ).status_code == 403
+
+    membership = call(
+        app, '/seller/stores/store-1/members', 'post',
+        {'email': 'seller2@example.com', 'permission': 'fulfillment'}, seller
+    )
+    assert membership.status_code == 200, membership.json
+
+    response = call(app, '/items/' + item_id + '/tracking', headers=seller2)
+    assert response.status_code == 200, response.json
+
+
+def test_seller_can_track_item_they_bought_from_another_store(app):
+    seller = login(app, 'seller')
+    order, _ = buy(
+        app,
+        seller,
+        pid='p3',
+        key='seller-buyer-tracking-key'
+    )
+    assert order.status_code == 201, order.json
+
+    item_id = order.json['items'][0]['id']
+    response = call(
+        app,
+        '/items/' + item_id + '/tracking',
+        headers=seller
+    )
+
+    assert response.status_code == 200, response.json
+    assert response.json['status'] == 'confirmed'
+    assert [event['event'] for event in response.json['events']] == [
+        'order.confirmed'
+    ]
