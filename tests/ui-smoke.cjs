@@ -56,6 +56,8 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
  d.querySelector('.storefront-header [data-view="shop"]').click();
  await until(()=>d.querySelectorAll('.product').length===6,'final marketplace return');
 
+ let uiTrackedItemId = '';
+
  for(const role of ['customer','seller','seller2','admin','delivery','warehouse','support','finance']){
   d.querySelector('#account').click();
   d.querySelector('[name=email]').value=role+'@example.com';d.querySelector('[name=password]').value='7by11Demo!2026';
@@ -123,6 +125,29 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    d.querySelector('[name=address]').value='Demo address 12 Fictional Road Delhi';
    d.querySelector('#checkout-form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
    await until(()=>d.querySelector('.order'),'placed order');
+
+   const customerTrack = d.querySelector('.order [data-track]');
+   if(!customerTrack)throw Error('Customer order tracking button missing');
+   uiTrackedItemId = customerTrack.dataset.track;
+   customerTrack.click();
+
+   await until(
+    ()=>d.querySelector('#modal').open
+      && d.querySelector('#modal').textContent.includes('Order confirmed')
+      && d.querySelector('#modal').textContent.includes('Updated by'),
+    'customer order tracking timeline'
+   );
+
+   const customerTimeline = d.querySelector('#modal').textContent;
+   if(!customerTimeline.includes('Current status')
+      || !customerTimeline.includes('confirmed'))
+    throw Error('Customer tracking timeline status is missing');
+
+   console.log('PASS customer tracking: order confirmation timeline');
+
+   d.querySelector('#close-modal').click();
+   await until(()=>!d.querySelector('#modal').open,'close customer tracking modal');
+
   }
   if(role==='seller'){
    const edit=d.querySelector('[data-edit-product="p1"]');
@@ -267,6 +292,33 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    console.log('PASS seller inventory: filtered history and inventory dashboard');
    d.querySelector('[data-tab=catalog]').click();
    await until(()=>d.querySelector('[data-edit-product="p1"]'),'return to catalog');
+
+   const ordersTab = d.querySelector('[data-tab="orders"]');
+   if(!ordersTab)throw Error('Seller Orders tab missing');
+   ordersTab.click();
+
+   await until(
+    ()=>d.querySelector(`#workspace-content [data-track="${uiTrackedItemId}"]`),
+    'seller order tracking button'
+   );
+
+   d.querySelector(`#workspace-content [data-track="${uiTrackedItemId}"]`).click();
+
+   await until(
+    ()=>d.querySelector('#modal').open
+      && d.querySelector('#modal').textContent.includes('Order confirmed')
+      && d.querySelector('#modal').textContent.includes('Updated by'),
+    'seller order tracking timeline'
+   );
+
+   if(!d.querySelector('#modal').textContent.includes('Current status'))
+    throw Error('Seller tracking timeline status is missing');
+
+   console.log('PASS seller tracking: order-item timeline');
+
+   d.querySelector('#close-modal').click();
+   await until(()=>!d.querySelector('#modal').open,'close seller tracking modal');
+
   }
 
   if(d.querySelector('#main').textContent.includes('Unexpected server error'))throw Error(role+' workspace failed');
