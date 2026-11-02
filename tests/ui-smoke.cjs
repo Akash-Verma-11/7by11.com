@@ -321,6 +321,32 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
 
   }
 
+
+  if(role==='admin' || role==='warehouse'){
+   const operationalTrack = [...d.querySelectorAll('#main [data-track]')]
+    .find(button=>button.dataset.track===uiTrackedItemId);
+
+   if(!operationalTrack)
+    throw Error(role+' tracking button missing for the customer order');
+
+   operationalTrack.click();
+
+   await until(
+    ()=>d.querySelector('#modal').open
+      && d.querySelector('#modal').textContent.includes('Order confirmed')
+      && d.querySelector('#modal').textContent.includes('Updated by'),
+    role+' order tracking timeline'
+   );
+
+   if(!d.querySelector('#modal').textContent.includes('Current status'))
+    throw Error(role+' tracking timeline status is missing');
+
+   console.log('PASS '+role+' tracking: operational order timeline');
+
+   d.querySelector('#close-modal').click();
+   await until(()=>!d.querySelector('#modal').open,'close '+role+' tracking modal');
+  }
+
   if(d.querySelector('#main').textContent.includes('Unexpected server error'))throw Error(role+' workspace failed');
   console.log('PASS UI DOM:',role);
   d.querySelector('#account').click();await until(()=>d.querySelector('#account').textContent==='Sign in','logout');await delay(100);

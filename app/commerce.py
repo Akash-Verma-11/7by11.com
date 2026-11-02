@@ -13,7 +13,7 @@ def order_view(db,id,user=None):
 
 
 @bp.get('/api/items/<id>/tracking')
-@auth('customer', 'seller')
+@auth('customer', 'seller', 'admin', 'warehouse')
 def item_tracking(id):
     with transaction() as db:
         item = db.one(
@@ -30,10 +30,12 @@ def item_tracking(id):
         if not item:
             fail('Item not found', 404)
 
-        if item['user_id'] != g.user['id']:
-            if g.user['role'] == 'customer':
+        if g.user['role'] == 'customer':
+            if item['user_id'] != g.user['id']:
                 fail('Item not found', 404)
-            store_access(db, item['store_id'], 'fulfillment')
+        elif g.user['role'] not in ('admin', 'warehouse'):
+            if item['user_id'] != g.user['id']:
+                store_access(db, item['store_id'], 'fulfillment')
 
         audit_rows = db.all(
             """

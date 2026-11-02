@@ -921,3 +921,102 @@ def test_seller_can_track_item_they_bought_from_another_store(app):
     assert [event['event'] for event in response.json['events']] == [
         'order.confirmed'
     ]
+
+
+# Phase 3.8: operational tracking and delivery exceptions
+def test_admin_and_warehouse_can_track_order_items(app):
+    customer = login(app)
+    order, _ = buy(app, customer)
+    assert order.status_code == 201, order.json
+    item_id = order.json['items'][0]['id']
+
+    for role in ('admin', 'warehouse'):
+        response = call(
+            app,
+            '/items/' + item_id + '/tracking',
+            headers=login(app, role)
+        )
+        assert response.status_code == 200, (role, response.json)
+        assert response.json['item_id'] == item_id
+        assert response.json['events'][0]['event'] == 'order.confirmed'
+
+
+def test_failed_delivery_attempt_is_recorded_once_before_completion(app):
+    customer = login(app)
+    order, _ = buy(app, customer)
+    assert order.status_code == 201, order.json
+    item_id = order.json['items'][0]['id']
+
+    seller = login(app, 'seller')
+    packed = call(
+        app, '/seller/items/' + item_id + '/pack',
+        'post', {}, seller
+    )
+    assert packed.status_code == 200, packed.json
+
+    admin = login(app, 'admin')
+    assigned = call(
+        app, '/admin/items/' + item_id + '/assign',
+        'post', {'courier_id': 'delivery'}, admin
+    )
+    assert assigned.status_code == 200, assigned.json
+
+    rider = login(app, 'delivery')
+    started = call(
+        app, '/delivery/tasks/' + item_id,
+        'post', {'action': 'start'}, rider
+    )
+    assert started.status_code == 200, started.json
+
+    reason = 'Customer unavailable at delivery address'
+    failed = call(
+        app, '/delivery/tasks/' + item_id,
+        'post', {'action': 'attempt_failed', 'reason': reason}, rider
+    )
+    assert failed.status_code == 200, failed.json
+
+    before_completion = call(
+        app, '/items/' + item_id + '/tracking', headers=customer
+    )
+    assert before_completion.status_code == 200, before_completion.json
+
+    failure_events = [
+        event for event in before_completion.json['events']
+        if event['event'] == 'delivery.attempt_failed'
+    ]
+    assert len(failure_events) == 1
+    assert failure_events[0]['detail'] == reason
+    assert failure_events[0]['status'] == 'out_for_delivery'
+
+    code_response = call(
+        app, '/items/' + item_id + '/delivery-code',
+        'post', {}, customer
+    )
+    assert code_response.status_code == 200, code_response.json
+
+    completed = call(
+        app, '/delivery/tasks/' + item_id,
+        'post',
+        {
+            'action': 'complete',
+            'code': code_response.json['code'],
+            'cod_collected': False
+        },
+        rider
+    )
+    assert completed.status_code == 200, completed.json
+
+    final = call(
+        app, '/items/' + item_id + '/tracking', headers=customer
+    )
+    assert final.status_code == 200, final.json
+
+    event_names = [event['event'] for event in final.json['events']]
+    assert event_names == [
+        'order.confirmed',
+        'item.pack',
+        'delivery.start',
+        'delivery.attempt_failed',
+        'delivery.complete',
+    ]
+    assert final.json['status'] == 'delivered'

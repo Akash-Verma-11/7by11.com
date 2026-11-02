@@ -80,7 +80,7 @@ def tasks():
 @bp.post('/api/delivery/tasks/<id>')
 @auth('delivery')
 def delivery_task(id):
-    b=body();action=b.get('action');error=None
+    b=body();action=b.get('action');error=None;audit_detail=''
     with transaction(True) as db:
         i=db.one('SELECT i.*,o.user_id,o.payment FROM order_items i JOIN orders o ON i.order_id=o.id WHERE i.id=? AND i.courier_id=?',(id,g.user['id']))
         if not i:fail('Task not found',404)
@@ -89,7 +89,7 @@ def delivery_task(id):
             db.execute("UPDATE order_items SET status='out_for_delivery' WHERE id=?",(id,));notify(db,i['user_id'],i['name']+' is out for delivery. Generate your delivery code in Orders.')
         elif action=='attempt_failed':
             if i['status']!='out_for_delivery':fail('Task is not out for delivery',409)
-            audit(db,g.user['id'],'delivery.attempt_failed',id,text(b.get('reason'),'reason',3,300));notify(db,i['user_id'],'Delivery attempt failed for '+i['name'])
+            audit_detail=text(b.get('reason'),'reason',3,300);notify(db,i['user_id'],'Delivery attempt failed for '+i['name'])
         elif action=='complete':
             if i['status']!='out_for_delivery':fail('Task cannot be completed',409)
             if i['otp_attempts']>=5 or i['otp_expires']<now() or digest(str(b.get('code','')))!=i['otp_hash']:
@@ -101,7 +101,7 @@ def delivery_task(id):
                 net=i['total']-(i['total']*10//100)
                 db.execute('INSERT INTO ledger VALUES(?,?,?,?,?,?) ON CONFLICT(item_id,kind) DO NOTHING',(uid(),i['store_id'],id,'sale',net,now()));notify(db,i['user_id'],i['name']+' delivered. Thank you for shopping with 7by11.')
         else:fail('Invalid delivery action')
-        if not error:audit(db,g.user['id'],'delivery.'+action,id)
+        if not error:audit(db,g.user['id'],'delivery.'+action,id,audit_detail)
     if error:fail(error,409)
     return {'ok':True}
 
