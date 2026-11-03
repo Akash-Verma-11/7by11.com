@@ -18,3 +18,16 @@ The tests must use an isolated database. With DATABASE_URL set, the test fixture
 ## Consolidated package check — 4 October 2026
 
 Re-ran all 18 SQLite test groups and the eight-account UI DOM integration check successfully. Checked application JavaScript, the added Bash launcher syntax and Python launcher compilation. All source, dependency manifests, schema, seed data, UI assets, deployment configurations and documentation are included in one root folder. Added START_HERE.md, Bash and PowerShell Docker launchers, and a Python-only local launcher. Docker/PostgreSQL startup and the PowerShell launcher still require verification on the target machine; Docker is unavailable in this build environment.
+
+
+## Phase 3.9 — Delivery exception management
+
+Verification date: 3 November 2026.
+
+- Backend: all 49 pytest tests passed on the isolated SQLite test database.
+- JavaScript: `node --check web/app.js` and `node --check tests/ui-smoke.cjs` passed.
+- UI integration: all eight seeded role sign-ins and workspace checks passed. The smoke test also exercised the customer order lifecycle through seller packing, Admin courier assignment, a delivery partner's failed attempt, and Admin review of the populated exception queue.
+- Exception queue: verified display of the failure reason, attempt count and tracking action. Reassignment returned the item to packed while keeping its failed-attempt record and count visible.
+- Repository hygiene: `git diff --check` passed after removing trailing whitespace.
+
+These checks validate the application and its jsdom integration workflow. They do not establish browser layout correctness, production readiness, live carrier integration, payment processing, or infrastructure deployment. The target-environment checks listed above remain applicable.

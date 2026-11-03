@@ -104,6 +104,8 @@ Step 4: Sign in as admin. Assign the packed line to delivery. For the seeded acc
 
 Step 5: Sign in as delivery, open Workspace and start the assigned task. The line changes to out_for_delivery. A failed attempt can be recorded with a reason without completing delivery.
 
+Step 5a: Sign back in as admin and open the Delivery exceptions panel. Refresh the queue to see affected items, latest failure reason, attempt count, courier and last-attempt time. Open the item timeline to inspect its events. To send the item out again, use Reassign delivery and select an active delivery user. Reassignment returns the item to packed so the assigned delivery partner must start the task again. Earlier failed attempts remain in the exception queue and tracking history.
+
 Step 6: Return to the customer's Orders screen and generate a delivery code for that line. Share it only with the delivery person during the test. The code expires after ten minutes. In the delivery workspace enter it and confirm collection for COD. The API limits wrong attempts; the customer can generate a new code if required.
 
 Step 7: Complete delivery. The customer now sees delivered, can submit a verified review and can request a return. A demo earning is recorded for the seller. Admin must approve the review before it appears publicly.

@@ -143,7 +143,157 @@ el.innerHTML=`<div class="stats">
 }else if(workspaceTab==='orders'){const items=await api('/seller/orders');el.innerHTML=itemTable(items,i=>`<button data-track="${i.id}">Track item</button> ${i.status==='confirmed'?`<button data-pack="${i.id}">Mark packed</button>`:''}`);}else if(workspaceTab==='returns'){el.innerHTML=returnCards(await api('/seller/returns'));}else if(workspaceTab==='finance'){el.innerHTML='';for(const s of stores){try{const f=await api('/seller/stores/'+s.id+'/finance');el.innerHTML+=`<section class="panel"><h3>${esc(s.name)}</h3><p>Illustrative net earned ${money(f.earned)} · Available ${money(f.available)}</p><button data-payout="${s.id}">Request demo payout</button><p class="demo">10% illustrative commission. No bank transfers. Refunds reverse the original earning entry.</p>${f.payouts.map(p=>`<p>${esc(p.id)} · ${money(p.amount)} · ${badge(p.status)}</p>`).join('')}</section>`;}catch(e){el.innerHTML+=`<p>${esc(s.name)}: ${esc(e.message)}</p>`;}}}else{el.innerHTML=stores.map(s=>`<section class="panel"><h3>${esc(s.name)}</h3><form data-form="staff" data-store="${s.id}">${field('Registered staff email','email','email')}<label>Permission<select name="permission"><option>catalog</option><option>fulfillment</option><option>finance</option><option>remove</option></select></label><button>Save membership</button></form></section>`).join('');}}
 function itemTable(items,actions){return `<section class="panel"><div class="table-wrap"><table><thead><tr><th>Order item</th><th>Product</th><th>State</th><th>Action</th></tr></thead><tbody>${items.map(i=>`<tr><td>${esc(i.id)}<br><small>${esc(i.order_id||i.store_id||'')}</small></td><td>${esc(i.name)}${i.quantity?' × '+i.quantity:''}</td><td>${badge(i.status)}</td><td>${actions(i)}</td></tr>`).join('')}</tbody></table></div>${items.length?'':'<p>No tasks yet.</p>'}</section>`;}
 function returnCards(rs){return rs.map(r=>`<section class="panel"><h3>${esc(r.name)}</h3><p>${esc(r.reason)} · ${badge(r.status)}</p><div class="row"><button data-track="${r.item_id}">Track item</button></div>${r.status==='requested'?`<button data-receive="${r.id}">Confirm physical return received</button>`:''}${r.status==='received'?`<button data-refund="${r.id}">Inspect & record demo refund</button>`:''}</section>`).join('')||'<div class="empty">No return requests.</div>';}
-async function admin(){const d=await api('/admin/overview');$('#main').innerHTML=`<span class="eyebrow">7BY11 OPERATIONS</span><h1>Marketplace control.</h1><div class="stats"><div class="stat">Stores<strong>${d.stores}</strong></div><div class="stat">Orders<strong>${d.orders}</strong></div><div class="stat">Ordered value before refunds<strong>${money(d.ordered_value)}</strong></div></div><section class="panel"><h3>Store approvals & access</h3>${d.stores_list.map(s=>`<div class="order-item row between"><span><strong>${esc(s.name)}</strong> ${badge(s.status)}</span><button data-store-moderate="${s.id}">Review store</button></div>`).join('')}</section><section class="panel"><h3>Product moderation</h3>${d.products.map(p=>`<div class="order-item row between"><span>${esc(p.name)} ${badge(p.moderation)}</span><button data-moderate="${p.id}">Review listing</button></div>`).join('')}</section><h3>Fulfillment & delivery assignment</h3>${itemTable(d.items,i=>`<button data-track="${i.id}">Track item</button> ${['packed','out_for_delivery'].includes(i.status)?`<button data-assign="${i.id}">Assign delivery</button>`:''}`)}<div class="grid2"><section class="panel"><h3>Customer reviews</h3>${d.reviews.map(r=>`<p>${r.rating}/5 · ${esc(r.body)} ${badge(r.status)} <button data-review-moderate="${r.id}">Moderate</button></p>`).join('')||'<p>No reviews.</p>'}</section><section class="panel"><h3>Create coupon</h3><form data-form="coupon">${field('Code','code')}${field('Discount percent','percent','number')}${field('Maximum discount rupees','max_discount','number')}${field('Minimum order rupees','minimum','number','0')}${field('Maximum redemptions','max_uses','number','100')}${field('Valid days','days','number','30')}<button>Create coupon</button></form></section></div><section class="panel"><h3>User access</h3>${d.users_list.filter(u=>u.role!=='admin').map(u=>`<div class="row between"><p>${esc(u.email)} · ID ${esc(u.id)} · ${esc(u.role)} ${badge(u.status)}</p><button data-user-status="${u.id}" data-status="${u.status==='active'?'suspended':'active'}">${u.status==='active'?'Suspend':'Restore'}</button></div>`).join('')}</section><section class="panel"><h3>Payout approvals</h3><button id="finance-link">Open finance queue</button></section><section class="panel"><h3>Recent audit events</h3><div class="table-wrap"><table><thead><tr><th>Actor</th><th>Action</th><th>Entity</th></tr></thead><tbody>${d.audit.map(a=>`<tr><td>${esc(a.actor)}</td><td>${esc(a.action)}</td><td>${esc(a.entity)}</td></tr>`).join('')}</tbody></table></div></section>`;$('#finance-link').onclick=()=>finance().catch(e=>toast(e.message));}
+function deliveryExceptionCards(items) {
+  return items.map(item => {
+    const timestamp = Number(item.last_attempt_at);
+    const lastAttempt = Number.isFinite(timestamp) && timestamp > 0
+      ? new Date(timestamp * 1000).toLocaleString()
+      : 'Unknown';
+
+    return `<div class="order-item">
+      <div class="row between">
+        <strong>${esc(item.name)}${item.quantity ? ' × ' + esc(item.quantity) : ''}</strong>
+        ${badge(item.status)}
+      </div>
+      <p>Item ${esc(item.item_id)} · Order ${esc(item.order_id)}</p>
+      <p><strong>Latest failure reason:</strong> ${esc(item.latest_reason)}</p>
+      <p><strong>Attempts:</strong> ${esc(item.attempt_count)}
+        · <strong>Courier:</strong> ${esc(item.courier_name || item.courier_id || 'Unassigned')}</p>
+      <p><strong>Last attempt:</strong> ${esc(lastAttempt)}
+        · <strong>Recorded by:</strong> ${esc(item.last_attempt_by || 'Unknown')}</p>
+      ${item.address ? `<p><strong>Delivery address:</strong> ${esc(item.address)}</p>` : ''}
+      <p>${item.needs_action ? badge('Action needed') : badge('No action required')}</p>
+      <div class="row">
+        <button data-track="${esc(item.item_id)}">Track item</button>
+        ${item.needs_action ? `<button data-assign="${esc(item.item_id)}">Reassign delivery</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty">No delivery exceptions recorded.</div>';
+}
+
+async function refreshDeliveryExceptions() {
+  const container = $('#delivery-exceptions-list');
+  if (!container) return;
+
+  container.innerHTML = '<p>Loading delivery exceptions...</p>';
+
+  try {
+    const items = await api('/admin/delivery-exceptions');
+    container.innerHTML = deliveryExceptionCards(items);
+  } catch (error) {
+    container.innerHTML = `<p class="error">${esc(error.message)}</p>`;
+  }
+}
+
+async function admin() {
+  const d = await api('/admin/overview');
+
+  $('#main').innerHTML = `
+    <span class="eyebrow">7BY11 OPERATIONS</span>
+    <h1>Marketplace control.</h1>
+
+    <div class="stats">
+      <div class="stat">Stores<strong>${d.stores}</strong></div>
+      <div class="stat">Orders<strong>${d.orders}</strong></div>
+      <div class="stat">Ordered value before refunds<strong>${money(d.ordered_value)}</strong></div>
+    </div>
+
+    <section class="panel">
+      <div class="row between">
+        <h3>Delivery exceptions</h3>
+        <button id="refresh-exceptions" type="button">Refresh</button>
+      </div>
+      <div id="delivery-exceptions-list">
+        <p>Loading delivery exceptions...</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Store approvals & access</h3>
+      ${d.stores_list.map(s => `
+        <div class="order-item row between">
+          <span><strong>${esc(s.name)}</strong> ${badge(s.status)}</span>
+          <button data-store-moderate="${s.id}">Review store</button>
+        </div>`).join('')}
+    </section>
+
+    <section class="panel">
+      <h3>Product moderation</h3>
+      ${d.products.map(p => `
+        <div class="order-item row between">
+          <span>${esc(p.name)} ${badge(p.moderation)}</span>
+          <button data-moderate="${p.id}">Review listing</button>
+        </div>`).join('')}
+    </section>
+
+    <h3>Fulfillment & delivery assignment</h3>
+    ${itemTable(d.items, i => `
+      <button data-track="${i.id}">Track item</button>
+      ${['packed', 'out_for_delivery'].includes(i.status)
+        ? `<button data-assign="${i.id}">Assign delivery</button>`
+        : ''}`)}
+
+    <div class="grid2">
+      <section class="panel">
+        <h3>Customer reviews</h3>
+        ${d.reviews.map(r => `
+          <p>${r.rating}/5 · ${esc(r.body)} ${badge(r.status)}
+            <button data-review-moderate="${r.id}">Moderate</button>
+          </p>`).join('') || '<p>No reviews.</p>'}
+      </section>
+
+      <section class="panel">
+        <h3>Create coupon</h3>
+        <form data-form="coupon">
+          ${field('Code', 'code')}
+          ${field('Discount percent', 'percent', 'number')}
+          ${field('Maximum discount rupees', 'max_discount', 'number')}
+          ${field('Minimum order rupees', 'minimum', 'number', '0')}
+          ${field('Maximum redemptions', 'max_uses', 'number', '100')}
+          ${field('Valid days', 'days', 'number', '30')}
+          <button>Create coupon</button>
+        </form>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h3>User access</h3>
+      ${d.users_list.filter(u => u.role !== 'admin').map(u => `
+        <div class="row between">
+          <p>${esc(u.email)} · ID ${esc(u.id)} · ${esc(u.role)} ${badge(u.status)}</p>
+          <button data-user-status="${u.id}"
+            data-status="${u.status === 'active' ? 'suspended' : 'active'}">
+            ${u.status === 'active' ? 'Suspend' : 'Restore'}
+          </button>
+        </div>`).join('')}
+    </section>
+
+    <section class="panel">
+      <h3>Payout approvals</h3>
+      <button id="finance-link">Open finance queue</button>
+    </section>
+
+    <section class="panel">
+      <h3>Recent audit events</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Actor</th><th>Action</th><th>Entity</th></tr></thead>
+          <tbody>${d.audit.map(a => `
+            <tr>
+              <td>${esc(a.actor)}</td>
+              <td>${esc(a.action)}</td>
+              <td>${esc(a.entity)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+
+  $('#finance-link').onclick = () => finance().catch(e => toast(e.message));
+  $('#refresh-exceptions').onclick = () => refreshDeliveryExceptions();
+
+  await refreshDeliveryExceptions();
+}
 async function delivery(){const ts=await api('/delivery/tasks');$('#main').innerHTML=`<span class="eyebrow">DELIVERY WORKSPACE</span><h1>Your route today.</h1>${ts.map(t=>`<section class="panel"><h3>${esc(t.name)} × ${t.quantity}</h3><p>${esc(t.address)}</p><p>${badge(t.status)} · ${t.payment==='cod_due'?'Collect cash '+money(t.total):'Demo prepaid'}</p>${t.status==='packed'?`<button class="primary" data-start="${t.id}">Confirm pickup & start delivery</button>`:`<button class="primary" data-complete="${t.id}" data-cod="${t.payment==='cod_due'}">Complete with customer code</button><button data-failed="${t.id}">Failed attempt</button>`}</section>`).join('')||'<div class="empty">No assigned delivery tasks.</div>'}`;}
 async function warehouse(){const d=await api('/warehouse/tasks');$('#main').innerHTML='<h1>Warehouse operations</h1>'+itemTable(d.items,i=>`<button data-track="${i.id}">Track item</button> <button data-pack="${i.id}">Confirm packed</button>`)+returnCards(d.returns);}
 async function finance(){const ps=await api('/finance/payouts');$('#main').innerHTML=`<h1>Finance approvals</h1><p class="demo">Illustrative ledger and payout workflow. No real bank transfers are made.</p>${ps.map(p=>`<section class="panel"><h3>${esc(p.store_name)} · ${money(p.amount)}</h3><p>${esc(p.id)} ${badge(p.status)}</p>${p.status==='pending'?`<button data-approve-payout="${p.id}" data-status="paid_demo">Approve demo payout</button><button data-approve-payout="${p.id}" data-status="rejected">Reject</button>`:''}</section>`).join('')||'<div class="empty">No payout requests.</div>'}`;}

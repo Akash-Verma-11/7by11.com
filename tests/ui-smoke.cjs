@@ -58,7 +58,7 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
 
  let uiTrackedItemId = '';
 
- for(const role of ['customer','seller','seller2','admin','delivery','warehouse','support','finance']){
+ for(const role of ['customer','warehouse','seller','seller2','admin','delivery','support','finance']){
   d.querySelector('#account').click();
   d.querySelector('[name=email]').value=role+'@example.com';d.querySelector('[name=password]').value='7by11Demo!2026';
   d.querySelector('#login-form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
@@ -319,6 +319,19 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
    d.querySelector('#close-modal').click();
    await until(()=>!d.querySelector('#modal').open,'close seller tracking modal');
 
+   // Pack the customer order for delivery.
+   const packOrder = d.querySelector(
+    `#workspace-content [data-pack="${uiTrackedItemId}"]`
+   );
+   if(!packOrder)throw Error('Seller could not find the customer order to pack');
+   packOrder.click();
+   await until(
+    ()=>!d.querySelector(`#workspace-content [data-pack="${uiTrackedItemId}"]`),
+    'seller packed customer order'
+   );
+   console.log('PASS seller delivery preparation: customer order packed');
+
+
   }
 
 
@@ -345,12 +358,103 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
 
    d.querySelector('#close-modal').click();
    await until(()=>!d.querySelector('#modal').open,'close '+role+' tracking modal');
+
+   if(role==='admin'){
+    const assignOrder=d.querySelector(`#main [data-assign="${uiTrackedItemId}"]`);
+    if(!assignOrder)throw Error('Admin could not find the packed customer order');
+
+    assignOrder.click();
+    await until(()=>d.querySelector('#action-form'),'Admin courier assignment form');
+
+    const assignForm=d.querySelector('#action-form');
+    assignForm.querySelector('[name=courier_id]').value='delivery';
+    assignForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+
+    await until(()=>!d.querySelector('#modal').open,'Admin assigned courier');
+    console.log('PASS admin delivery preparation: courier assigned');
+   }
+
   }
 
   if(d.querySelector('#main').textContent.includes('Unexpected server error'))throw Error(role+' workspace failed');
+
+  if(role==='delivery'){
+   const startTask=d.querySelector(`#main [data-start="${uiTrackedItemId}"]`);
+   if(!startTask)throw Error('Delivery partner cannot find the assigned customer order');
+
+   startTask.click();
+   await until(
+    ()=>d.querySelector(`#main [data-failed="${uiTrackedItemId}"]`),
+    'delivery partner started assigned order'
+   );
+
+   d.querySelector(`#main [data-failed="${uiTrackedItemId}"]`).click();
+   await until(()=>d.querySelector('#action-form'),'failed delivery reason form');
+
+   const failureForm=d.querySelector('#action-form');
+   failureForm.querySelector('[name=reason]').value='Customer unavailable during UI smoke test';
+   failureForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+
+   await until(()=>!d.querySelector('#modal').open,'delivery failure recorded');
+   console.log('PASS delivery exception: failed attempt submitted');
+  }
+
   console.log('PASS UI DOM:',role);
   d.querySelector('#account').click();await until(()=>d.querySelector('#account').textContent==='Sign in','logout');await delay(100);
  }
+
+ // Re-login as Admin after the delivery partner records the failure.
+ d.querySelector('#account').click();
+ await until(()=>d.querySelector('#login-form'),'open final Admin login');
+
+ d.querySelector('[name=email]').value='admin@example.com';
+ d.querySelector('[name=password]').value='7by11Demo!2026';
+ d.querySelector('#login-form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+
+ await until(
+  ()=>d.querySelector('#account').textContent.includes('Sign out')
+   && d.querySelector('#delivery-exceptions-list')
+     ?.textContent.includes('Customer unavailable during UI smoke test'),
+  'Admin populated delivery exception queue'
+ );
+
+ const exceptionPanel=d.querySelector('#delivery-exceptions-list');
+ const exceptionText=exceptionPanel.textContent;
+
+ if(!exceptionText.includes('Attempts: 1'))
+  throw Error('Delivery exception attempt count was not displayed');
+
+ if(!exceptionPanel.querySelector(`[data-track="${uiTrackedItemId}"]`))
+  throw Error('Delivery exception tracking button is missing');
+
+ const reassignException=exceptionPanel.querySelector(
+  `[data-assign="${uiTrackedItemId}"]`
+ );
+ if(!reassignException)
+  throw Error('Delivery exception reassignment button is missing');
+
+ console.log('PASS admin delivery exceptions: populated queue, reason, count and tracking');
+
+ reassignException.click();
+ await until(()=>d.querySelector('#action-form'),'exception reassignment form');
+
+ const exceptionAssignForm=d.querySelector('#action-form');
+ exceptionAssignForm.querySelector('[name=courier_id]').value='delivery';
+ exceptionAssignForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+
+ await until(
+  ()=>d.querySelector('#delivery-exceptions-list')
+    ?.textContent.includes('Customer unavailable during UI smoke test')
+    && d.querySelector('#delivery-exceptions-list')?.textContent.includes('packed'),
+  'exception remains visible after reassignment'
+ );
+
+ const reassignedText=d.querySelector('#delivery-exceptions-list').textContent;
+ if(!reassignedText.includes('Attempts: 1'))
+  throw Error('Reassignment did not preserve delivery attempt history');
+
+ console.log('PASS admin delivery exceptions: reassignment retains exception history');
+
  if(errors.length)throw Error(errors.join('\n'));
  console.log('PASS: catalog, customer UI checkout, eight role sign-ins and workspace render; no script exceptions');
  }finally{dom?.window.close();server.kill();}

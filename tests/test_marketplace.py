@@ -1020,3 +1020,105 @@ def test_failed_delivery_attempt_is_recorded_once_before_completion(app):
         'delivery.complete',
     ]
     assert final.json['status'] == 'delivered'
+
+
+# Phase 3.9: delivery exception management
+def test_admin_delivery_exceptions_tracks_attempts_and_reassignment(app):
+    customer = login(app)
+    order, _ = buy(app, customer)
+    assert order.status_code == 201, order.json
+    item_id = order.json['items'][0]['id']
+
+    admin = login(app, 'admin')
+    seller = login(app, 'seller')
+    rider = login(app, 'delivery')
+
+    empty = call(app, '/admin/delivery-exceptions', headers=admin)
+    assert empty.status_code == 200, empty.json
+    assert empty.json == []
+
+    assert call(
+        app, '/seller/items/' + item_id + '/pack',
+        'post', {}, seller
+    ).status_code == 200
+
+    assert call(
+        app, '/admin/items/' + item_id + '/assign',
+        'post', {'courier_id': 'delivery'}, admin
+    ).status_code == 200
+
+    assert call(
+        app, '/delivery/tasks/' + item_id,
+        'post', {'action': 'start'}, rider
+    ).status_code == 200
+
+    first_reason = 'Customer unavailable at delivery address'
+    first_failure = call(
+        app, '/delivery/tasks/' + item_id,
+        'post', {'action': 'attempt_failed', 'reason': first_reason}, rider
+    )
+    assert first_failure.status_code == 200, first_failure.json
+
+    exceptions = call(app, '/admin/delivery-exceptions', headers=admin)
+    assert exceptions.status_code == 200, exceptions.json
+    assert len(exceptions.json) == 1
+
+    exception = exceptions.json[0]
+    assert exception['item_id'] == item_id
+    assert exception['status'] == 'out_for_delivery'
+    assert exception['courier_id'] == 'delivery'
+    assert exception['courier_name'] == 'Delivery Partner'
+    assert exception['attempt_count'] == 1
+    assert exception['latest_reason'] == first_reason
+    assert exception['last_attempt_at'] > 0
+
+    assert call(
+        app, '/admin/delivery-exceptions', headers=seller
+    ).status_code == 403
+    assert call(
+        app, '/admin/delivery-exceptions', headers=rider
+    ).status_code == 403
+
+    # Reassignment keeps the exception visible and resets the item to packed.
+    reassigned = call(
+        app, '/admin/items/' + item_id + '/assign',
+        'post', {'courier_id': 'delivery'}, admin
+    )
+    assert reassigned.status_code == 200, reassigned.json
+
+    after_reassignment = call(
+        app, '/admin/delivery-exceptions', headers=admin
+    )
+    assert after_reassignment.status_code == 200
+    assert after_reassignment.json[0]['status'] == 'packed'
+    assert after_reassignment.json[0]['attempt_count'] == 1
+
+    assert call(
+        app, '/delivery/tasks/' + item_id,
+        'post', {'action': 'start'}, rider
+    ).status_code == 200
+
+    second_reason = 'Customer requested delivery at a later time'
+    second_failure = call(
+        app, '/delivery/tasks/' + item_id,
+        'post', {'action': 'attempt_failed', 'reason': second_reason}, rider
+    )
+    assert second_failure.status_code == 200, second_failure.json
+
+    updated = call(app, '/admin/delivery-exceptions', headers=admin)
+    assert updated.status_code == 200, updated.json
+    assert len(updated.json) == 1
+    assert updated.json[0]['attempt_count'] == 2
+    assert updated.json[0]['latest_reason'] == second_reason
+
+
+def test_admin_delivery_exceptions_excludes_items_without_failed_attempts(app):
+    customer = login(app)
+    order, _ = buy(app, customer)
+    item_id = order.json['items'][0]['id']
+
+    admin = login(app, 'admin')
+    exceptions = call(app, '/admin/delivery-exceptions', headers=admin)
+
+    assert exceptions.status_code == 200, exceptions.json
+    assert all(row['item_id'] != item_id for row in exceptions.json)

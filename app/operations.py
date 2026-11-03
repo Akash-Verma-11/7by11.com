@@ -8,6 +8,66 @@ def overview():
     with transaction() as db:
         return {'users':db.one('SELECT COUNT(*) AS n FROM users')['n'],'stores':db.one('SELECT COUNT(*) AS n FROM stores')['n'],'orders':db.one('SELECT COUNT(*) AS n FROM orders')['n'],'ordered_value':db.one('SELECT COALESCE(SUM(total),0) AS n FROM orders')['n'],'stores_list':db.all('SELECT * FROM stores ORDER BY id'),'products':db.all('SELECT id,name,store_id,status,moderation FROM products ORDER BY created DESC'),'users_list':db.all('SELECT id,email,name,role,status FROM users'),'items':db.all('SELECT id,order_id,store_id,name,status,courier_id FROM order_items ORDER BY created DESC LIMIT 200'),'reviews':db.all('SELECT * FROM reviews ORDER BY created DESC LIMIT 100'),'coupons':db.all('SELECT * FROM coupons'),'audit':db.all('SELECT * FROM audit ORDER BY created DESC LIMIT 100')}
 
+
+@bp.get('/api/admin/delivery-exceptions')
+@auth('admin')
+def delivery_exceptions():
+    with transaction() as db:
+        rows = db.all(
+            """
+            SELECT
+                a.entity AS item_id,
+                a.detail,
+                a.created,
+                actor.name AS attempt_by,
+                i.order_id,
+                i.name,
+                i.quantity,
+                i.status,
+                i.courier_id,
+                courier.name AS courier_name,
+                o.address,
+                o.payment
+            FROM audit a
+            JOIN order_items i ON i.id = a.entity
+            JOIN orders o ON o.id = i.order_id
+            LEFT JOIN users actor ON actor.id = a.actor
+            LEFT JOIN users courier ON courier.id = i.courier_id
+            WHERE a.action = 'delivery.attempt_failed'
+              AND a.detail <> ''
+            ORDER BY a.created DESC, a.id DESC
+            """
+        )
+
+        exceptions = {}
+        for row in rows:
+            item_id = row['item_id']
+
+            if item_id not in exceptions:
+                exceptions[item_id] = {
+                    'item_id': item_id,
+                    'order_id': row['order_id'],
+                    'name': row['name'],
+                    'quantity': row['quantity'],
+                    'status': row['status'],
+                    'courier_id': row['courier_id'],
+                    'courier_name': row['courier_name'],
+                    'address': row['address'],
+                    'payment': row['payment'],
+                    'attempt_count': 0,
+                    'latest_reason': row['detail'],
+                    'last_attempt_at': row['created'],
+                    'last_attempt_by': row['attempt_by'],
+                    'needs_action': row['status'] in (
+                        'packed', 'out_for_delivery'
+                    ),
+                }
+
+            exceptions[item_id]['attempt_count'] += 1
+
+        return list(exceptions.values())
+
+
 @bp.post('/api/admin/stores/<id>')
 @auth('admin')
 def moderate_store(id):
@@ -80,7 +140,7 @@ def tasks():
 @bp.post('/api/delivery/tasks/<id>')
 @auth('delivery')
 def delivery_task(id):
-    b=body();action=b.get('action');error=None;audit_detail=''
+    b=body();action=b.get('action');error=None;audit_detail='';audit_id=None
     with transaction(True) as db:
         i=db.one('SELECT i.*,o.user_id,o.payment FROM order_items i JOIN orders o ON i.order_id=o.id WHERE i.id=? AND i.courier_id=?',(id,g.user['id']))
         if not i:fail('Task not found',404)
@@ -89,7 +149,13 @@ def delivery_task(id):
             db.execute("UPDATE order_items SET status='out_for_delivery' WHERE id=?",(id,));notify(db,i['user_id'],i['name']+' is out for delivery. Generate your delivery code in Orders.')
         elif action=='attempt_failed':
             if i['status']!='out_for_delivery':fail('Task is not out for delivery',409)
-            audit_detail=text(b.get('reason'),'reason',3,300);notify(db,i['user_id'],'Delivery attempt failed for '+i['name'])
+            audit_detail = text(b.get('reason'), 'reason', 3, 300)
+            previous = db.one(
+                "SELECT COUNT(*) AS n FROM audit WHERE action=? AND entity=?",
+                ('delivery.attempt_failed', id)
+            )['n']
+            audit_id = f"delivery-attempt-{id}-{previous + 1:08d}"
+            notify(db, i['user_id'], 'Delivery attempt failed for ' + i['name'])
         elif action=='complete':
             if i['status']!='out_for_delivery':fail('Task cannot be completed',409)
             if i['otp_attempts']>=5 or i['otp_expires']<now() or digest(str(b.get('code','')))!=i['otp_hash']:
@@ -101,7 +167,15 @@ def delivery_task(id):
                 net=i['total']-(i['total']*10//100)
                 db.execute('INSERT INTO ledger VALUES(?,?,?,?,?,?) ON CONFLICT(item_id,kind) DO NOTHING',(uid(),i['store_id'],id,'sale',net,now()));notify(db,i['user_id'],i['name']+' delivered. Thank you for shopping with 7by11.')
         else:fail('Invalid delivery action')
-        if not error:audit(db,g.user['id'],'delivery.'+action,id,audit_detail)
+        if not error:
+            if audit_id:
+                db.execute(
+                    'INSERT INTO audit VALUES(?,?,?,?,?,?)',
+                    (audit_id, g.user['id'], 'delivery.' + action,
+                     id, audit_detail, now())
+                )
+            else:
+                audit(db, g.user['id'], 'delivery.' + action, id, audit_detail)
     if error:fail(error,409)
     return {'ok':True}
 
