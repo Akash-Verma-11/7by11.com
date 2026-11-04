@@ -31,3 +31,16 @@ Verification date: 3 November 2026.
 - Repository hygiene: `git diff --check` passed after removing trailing whitespace.
 
 These checks validate the application and its jsdom integration workflow. They do not establish browser layout correctness, production readiness, live carrier integration, payment processing, or infrastructure deployment. The target-environment checks listed above remain applicable.
+
+
+## Phase 3.10 — Delivery operations and SLA dashboard
+
+Verification date: 4 November 2026.
+
+- Backend: all 50 pytest tests passed on the isolated SQLite test database.
+- Python and JavaScript syntax checks passed; `git diff --check` passed.
+- UI integration: all eight role workspaces passed. Dashboard checks covered workload metrics, repeat-failure filtering, item tracking, reassignment, and updated packed/out-for-delivery counts.
+- SLA calculation test: deterministic audit timestamps verified under-24-hour, 24-hour-plus and 48-hour-plus ageing; repeat attempts; unassigned packed work; seven-day completion count; and average out-for-delivery duration with its sample count.
+- No schema migration was required.
+
+The 24-hour and 48-hour values are internal operational monitoring thresholds, not contractual delivery SLAs. jsdom checks validate application behavior, not visual browser layout. Live carrier integrations, production deployment and infrastructure-level verification remain outside this phase.

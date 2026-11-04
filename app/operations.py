@@ -68,6 +68,213 @@ def delivery_exceptions():
         return list(exceptions.values())
 
 
+
+@bp.get('/api/admin/delivery-operations')
+@auth('admin')
+def delivery_operations():
+    with transaction() as db:
+        current = now()
+        warning_seconds = 24 * 3600
+        critical_seconds = 48 * 3600
+
+        pending = db.all(
+            """
+            SELECT
+                i.id, i.order_id, i.name, i.quantity, i.status,
+                i.courier_id, i.created,
+                courier.name AS courier_name,
+                o.address, o.payment
+            FROM order_items i
+            JOIN orders o ON o.id = i.order_id
+            LEFT JOIN users courier ON courier.id = i.courier_id
+            WHERE i.status IN ('packed', 'out_for_delivery')
+            ORDER BY i.created ASC
+            """
+        )
+
+        events_by_item = {}
+        if pending:
+            item_ids = [item['id'] for item in pending]
+            placeholders = ','.join('?' for _ in item_ids)
+            events = db.all(
+                f"""
+                SELECT
+                    a.id, a.entity, a.action, a.detail, a.created,
+                    a.actor, u.name AS actor_name
+                FROM audit a
+                LEFT JOIN users u ON u.id = a.actor
+                WHERE a.entity IN ({placeholders})
+                  AND a.action IN (
+                    'item.pack',
+                    'delivery.assign',
+                    'delivery.start',
+                    'delivery.attempt_failed'
+                  )
+                ORDER BY a.created ASC, a.id ASC
+                """,
+                item_ids
+            )
+            for event in events:
+                events_by_item.setdefault(event['entity'], []).append(event)
+
+        items = []
+        for item in pending:
+            events = events_by_item.get(item['id'], [])
+            failures = [
+                event for event in events
+                if event['action'] == 'delivery.attempt_failed'
+            ]
+
+            if item['status'] == 'packed':
+                stage_events = [
+                    event for event in events
+                    if event['action'] in ('item.pack', 'delivery.assign')
+                ]
+                stage_label = 'Awaiting delivery pickup'
+                # Assignment is the latest entry into packed when an item
+                # is reassigned after a failed delivery.
+                stage_priority = {
+                    'item.pack': 0,
+                    'delivery.assign': 1,
+                }
+            else:
+                stage_events = [
+                    event for event in events
+                    if event['action'] == 'delivery.start'
+                ]
+                stage_label = 'Out for delivery'
+                stage_priority = {'delivery.start': 1}
+
+            stage_event = max(
+                stage_events,
+                key=lambda event: (
+                    event['created'],
+                    stage_priority.get(event['action'], 0),
+                    event['id'],
+                ),
+                default=None,
+            )
+            stage_since = (
+                stage_event['created'] if stage_event else item['created']
+            )
+            age_seconds = max(0, current - stage_since)
+
+            if age_seconds >= critical_seconds:
+                ageing_bucket = 'critical_48h'
+            elif age_seconds >= warning_seconds:
+                ageing_bucket = 'watch_24h'
+            else:
+                ageing_bucket = 'on_track'
+
+            latest_failure = max(
+                failures,
+                key=lambda event: (event['created'], event['id']),
+                default=None,
+            )
+
+            items.append({
+                'item_id': item['id'],
+                'order_id': item['order_id'],
+                'name': item['name'],
+                'quantity': item['quantity'],
+                'status': item['status'],
+                'courier_id': item['courier_id'],
+                'courier_name': item['courier_name'],
+                'address': item['address'],
+                'payment': item['payment'],
+                'stage_label': stage_label,
+                'stage_since': stage_since,
+                'age_seconds': age_seconds,
+                'age_hours': round(age_seconds / 3600, 1),
+                'ageing_bucket': ageing_bucket,
+                'attempt_count': len(failures),
+                'repeat_failure': len(failures) >= 2,
+                'latest_reason': latest_failure['detail'] if latest_failure else '',
+                'last_attempt_at': latest_failure['created'] if latest_failure else None,
+                'last_attempt_by': latest_failure['actor_name'] if latest_failure else None,
+                'needs_action': True,
+            })
+
+        priority = {
+            'critical_48h': 0,
+            'watch_24h': 1,
+            'on_track': 2,
+        }
+        items.sort(
+            key=lambda item: (
+                priority[item['ageing_bucket']],
+                -item['age_seconds'],
+            )
+        )
+
+        completions = db.all(
+            """
+            SELECT
+                a.entity,
+                a.created AS completed_at,
+                (
+                    SELECT MAX(start_event.created)
+                    FROM audit start_event
+                    WHERE start_event.entity = a.entity
+                      AND start_event.action = 'delivery.start'
+                      AND start_event.created <= a.created
+                ) AS started_at
+            FROM audit a
+            WHERE a.action = 'delivery.complete'
+              AND a.created >= ?
+            ORDER BY a.created DESC
+            """,
+            (current - 7 * 86400,)
+        )
+
+        completed_durations = [
+            max(0, row['completed_at'] - row['started_at'])
+            for row in completions
+            if row['started_at'] is not None
+        ]
+
+        summary = {
+            'packed_pending': sum(
+                item['status'] == 'packed' for item in items
+            ),
+            'out_for_delivery': sum(
+                item['status'] == 'out_for_delivery' for item in items
+            ),
+            'overdue_24h': sum(
+                item['age_seconds'] >= warning_seconds for item in items
+            ),
+            'critical_48h': sum(
+                item['age_seconds'] >= critical_seconds for item in items
+            ),
+            'repeat_failure_items': sum(
+                item['repeat_failure'] for item in items
+            ),
+            'unassigned_packed': sum(
+                item['status'] == 'packed' and not item['courier_id']
+                for item in items
+            ),
+            'delivered_last_7d': len(completions),
+            'avg_out_for_delivery_hours_7d': (
+                round(
+                    sum(completed_durations) / len(completed_durations) / 3600,
+                    1,
+                )
+                if completed_durations else None
+            ),
+        }
+
+        return {
+            'generated_at': current,
+            'thresholds': {
+                'warning_hours': 24,
+                'critical_hours': 48,
+                'performance_window_days': 7,
+            },
+            'summary': summary,
+            'items': items,
+        }
+
+
 @bp.post('/api/admin/stores/<id>')
 @auth('admin')
 def moderate_store(id):

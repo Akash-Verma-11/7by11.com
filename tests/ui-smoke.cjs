@@ -418,6 +418,42 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
   'Admin populated delivery exception queue'
  );
 
+ await until(
+  ()=>d.querySelector('#delivery-operations-summary')
+    ?.textContent.includes('Out for delivery'),
+  'Admin delivery operations metrics'
+ );
+
+ const slaSummary=d.querySelector('#delivery-operations-summary');
+ const slaStats=[...slaSummary.querySelectorAll('.stat')]
+  .map(element=>element.textContent.replace(/\\s+/g,' ').trim());
+ const metric=label=>slaStats.find(value=>value.startsWith(label));
+
+ if(!metric('Out for delivery')?.endsWith('1'))
+  throw Error('SLA dashboard should show one item out for delivery: '+slaStats.join(' | '));
+
+ if(!metric('Repeat failures')?.endsWith('0'))
+  throw Error('SLA dashboard repeat-failure count is incorrect');
+
+ const ageFilter=d.querySelector('#delivery-age-filter');
+ if(!ageFilter)throw Error('Delivery ageing filter is missing');
+
+ ageFilter.value='repeat_failure';
+ ageFilter.dispatchEvent(new w.Event('change',{bubbles:true}));
+
+ if(!d.querySelector('#delivery-operations-list').textContent.includes(
+  'No pending delivery items match this filter.'
+ ))
+  throw Error('Repeat-failure filter should exclude a single-attempt item');
+
+ ageFilter.value='all';
+ ageFilter.dispatchEvent(new w.Event('change',{bubbles:true}));
+
+ if(!d.querySelector(`#delivery-operations-list [data-track="${uiTrackedItemId}"]`))
+  throw Error('All-items filter did not restore the pending delivery item');
+
+ console.log('PASS admin delivery SLA dashboard: metrics and repeat-failure filter');
+
  const exceptionPanel=d.querySelector('#delivery-exceptions-list');
  const exceptionText=exceptionPanel.textContent;
 
@@ -454,6 +490,19 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
   throw Error('Reassignment did not preserve delivery attempt history');
 
  console.log('PASS admin delivery exceptions: reassignment retains exception history');
+
+ await until(
+  ()=>{
+   const stats=[...(d.querySelectorAll('#delivery-operations-summary .stat'))]
+    .map(element=>element.textContent.replace(/\\s+/g,' ').trim());
+   const packed=stats.find(value=>value.startsWith('Packed · awaiting pickup'));
+   const out=stats.find(value=>value.startsWith('Out for delivery'));
+   return packed?.endsWith('1') && out?.endsWith('0');
+  },
+  'SLA metrics updated after reassignment'
+ );
+
+ console.log('PASS admin delivery SLA dashboard: reassignment updates workload metrics');
 
  if(errors.length)throw Error(errors.join('\n'));
  console.log('PASS: catalog, customer UI checkout, eight role sign-ins and workspace render; no script exceptions');

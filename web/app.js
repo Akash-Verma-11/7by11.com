@@ -185,6 +185,103 @@ async function refreshDeliveryExceptions() {
   }
 }
 
+
+let deliveryOperationsData = null;
+
+function deliveryOperationsRows(items, filter = 'all') {
+  const filtered = items.filter(item => {
+    if (filter === 'repeat_failure') return item.repeat_failure;
+    if (filter === 'unassigned') {
+      return item.status === 'packed' && !item.courier_id;
+    }
+    return filter === 'all' || item.ageing_bucket === filter;
+  });
+
+  if (!filtered.length) {
+    return '<div class="empty">No pending delivery items match this filter.</div>';
+  }
+
+  return filtered.map(item => {
+    const stageDate = new Date(Number(item.stage_since) * 1000).toLocaleString();
+    const ageLabel = item.ageing_bucket === 'critical_48h'
+      ? badge('Critical · 48h+')
+      : item.ageing_bucket === 'watch_24h'
+        ? badge('Watch · 24h+')
+        : badge('Under 24h');
+
+    return `<div class="order-item">
+      <div class="row between">
+        <strong>${esc(item.name)}${item.quantity ? ' × ' + esc(item.quantity) : ''}</strong>
+        ${badge(item.status)}
+      </div>
+      <p>Item ${esc(item.item_id)} · Order ${esc(item.order_id)}</p>
+      <p><strong>Current stage:</strong> ${esc(item.stage_label)}
+        · <strong>Stage age:</strong> ${esc(item.age_hours)} hours</p>
+      <p>${ageLabel} ${item.repeat_failure ? badge('Repeat failures · ' + item.attempt_count) : ''}
+      </p>
+      <p><strong>Stage started:</strong> ${esc(stageDate)}</p>
+      <p><strong>Courier:</strong> ${esc(item.courier_name || item.courier_id || 'Unassigned')}</p>
+      ${item.attempt_count
+        ? `<p><strong>Failed attempts:</strong> ${esc(item.attempt_count)}
+          · <strong>Latest reason:</strong> ${esc(item.latest_reason || 'Not recorded')}</p>`
+        : '<p>No failed delivery attempts recorded.</p>'}
+      <div class="row">
+        <button data-track="${esc(item.item_id)}">Track item</button>
+        <button data-assign="${esc(item.item_id)}">Assign / reassign delivery</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderDeliveryOperations(data, filter = 'all') {
+  deliveryOperationsData = data;
+  const summary = data.summary;
+
+  const average = summary.avg_out_for_delivery_hours_7d === null
+    ? '—'
+    : `${esc(summary.avg_out_for_delivery_hours_7d)} h`;
+
+  $('#delivery-operations-summary').innerHTML = `
+    <div class="stats">
+      <div class="stat">Packed · awaiting pickup<strong>${esc(summary.packed_pending)}</strong></div>
+      <div class="stat">Out for delivery<strong>${esc(summary.out_for_delivery)}</strong></div>
+      <div class="stat">24h+ ageing<strong>${esc(summary.overdue_24h)}</strong></div>
+      <div class="stat">48h+ critical<strong>${esc(summary.critical_48h)}</strong></div>
+      <div class="stat">Repeat failures<strong>${esc(summary.repeat_failure_items)}</strong></div>
+      <div class="stat">Unassigned packed<strong>${esc(summary.unassigned_packed)}</strong></div>
+      <div class="stat">Delivered · last 7 days<strong>${esc(summary.delivered_last_7d)}</strong></div>
+      <div class="stat">Average delivery duration · last 7 days<strong>${average}</strong></div>
+    </div>`;
+
+  $('#delivery-operations-list').innerHTML = `
+    <p class="muted">Showing ${deliveryOperationsRows(data.items, filter).includes('No pending delivery items')
+      ? 0
+      : data.items.filter(item => {
+          if (filter === 'repeat_failure') return item.repeat_failure;
+          if (filter === 'unassigned') return item.status === 'packed' && !item.courier_id;
+          return filter === 'all' || item.ageing_bucket === filter;
+        }).length} pending items</p>
+    ${deliveryOperationsRows(data.items, filter)}`;
+}
+
+async function refreshDeliveryOperations() {
+  const summary = $('#delivery-operations-summary');
+  const list = $('#delivery-operations-list');
+  if (!summary || !list) return;
+
+  summary.innerHTML = '<p>Loading delivery metrics...</p>';
+  list.innerHTML = '<p>Loading pending delivery items...</p>';
+
+  try {
+    const data = await api('/admin/delivery-operations');
+    const filter = $('#delivery-age-filter')?.value || 'all';
+    renderDeliveryOperations(data, filter);
+  } catch (error) {
+    summary.innerHTML = '';
+    list.innerHTML = `<p class="error">${esc(error.message)}</p>`;
+  }
+}
+
 async function admin() {
   const d = await api('/admin/overview');
 
@@ -205,6 +302,32 @@ async function admin() {
       </div>
       <div id="delivery-exceptions-list">
         <p>Loading delivery exceptions...</p>
+      </div>
+    </section>
+
+    <section class="panel" id="delivery-operations-panel">
+      <div class="row between">
+        <h3>Delivery operations & SLA monitor</h3>
+        <button id="refresh-delivery-operations" type="button">Refresh metrics</button>
+      </div>
+      <p class="demo">Operational ageing indicators: 24-hour watch and 48-hour critical. These are internal monitoring targets, not carrier or contractual SLAs. Completion metrics use the last seven days.</p>
+      <div id="delivery-operations-summary">
+        <p>Loading delivery metrics...</p>
+      </div>
+      <div class="row">
+        <label>Filter pending items
+          <select id="delivery-age-filter">
+            <option value="all">All pending items</option>
+            <option value="critical_48h">Critical · 48h+</option>
+            <option value="watch_24h">Watch · 24h+</option>
+            <option value="on_track">Under 24h</option>
+            <option value="repeat_failure">Repeat failures</option>
+            <option value="unassigned">Unassigned packed</option>
+          </select>
+        </label>
+      </div>
+      <div id="delivery-operations-list">
+        <p>Loading pending delivery items...</p>
       </div>
     </section>
 
@@ -291,8 +414,15 @@ async function admin() {
 
   $('#finance-link').onclick = () => finance().catch(e => toast(e.message));
   $('#refresh-exceptions').onclick = () => refreshDeliveryExceptions();
+  $('#refresh-delivery-operations').onclick = () => refreshDeliveryOperations();
+  $('#delivery-age-filter').onchange = event => {
+    if (deliveryOperationsData) {
+      renderDeliveryOperations(deliveryOperationsData, event.target.value);
+    }
+  };
 
   await refreshDeliveryExceptions();
+  await refreshDeliveryOperations();
 }
 async function delivery(){const ts=await api('/delivery/tasks');$('#main').innerHTML=`<span class="eyebrow">DELIVERY WORKSPACE</span><h1>Your route today.</h1>${ts.map(t=>`<section class="panel"><h3>${esc(t.name)} × ${t.quantity}</h3><p>${esc(t.address)}</p><p>${badge(t.status)} · ${t.payment==='cod_due'?'Collect cash '+money(t.total):'Demo prepaid'}</p>${t.status==='packed'?`<button class="primary" data-start="${t.id}">Confirm pickup & start delivery</button>`:`<button class="primary" data-complete="${t.id}" data-cod="${t.payment==='cod_due'}">Complete with customer code</button><button data-failed="${t.id}">Failed attempt</button>`}</section>`).join('')||'<div class="empty">No assigned delivery tasks.</div>'}`;}
 async function warehouse(){const d=await api('/warehouse/tasks');$('#main').innerHTML='<h1>Warehouse operations</h1>'+itemTable(d.items,i=>`<button data-track="${i.id}">Track item</button> <button data-pack="${i.id}">Confirm packed</button>`)+returnCards(d.returns);}

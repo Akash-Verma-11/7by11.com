@@ -1,4 +1,4 @@
-import json, os
+import json, os, time
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 from app import create_app
@@ -1122,3 +1122,116 @@ def test_admin_delivery_exceptions_excludes_items_without_failed_attempts(app):
 
     assert exceptions.status_code == 200, exceptions.json
     assert all(row['item_id'] != item_id for row in exceptions.json)
+
+
+# Phase 3.10: delivery operations and ageing dashboard
+def test_admin_delivery_operations_ageing_repeats_and_performance(app):
+    customer = login(app)
+
+    critical_order, _ = buy(
+        app, customer, pid='p1', key='sla-critical-order-123'
+    )
+    warning_order, _ = buy(
+        app, customer, pid='p1', key='sla-warning-order-123'
+    )
+    delivered_order, _ = buy(
+        app, customer, pid='p1', key='sla-delivered-order-123'
+    )
+
+    assert all(
+        order.status_code == 201
+        for order in (critical_order, warning_order, delivered_order)
+    )
+
+    critical_id = critical_order.json['items'][0]['id']
+    warning_id = warning_order.json['items'][0]['id']
+    delivered_id = delivered_order.json['items'][0]['id']
+
+    admin = login(app, 'admin')
+    seller = login(app, 'seller')
+    rider = login(app, 'delivery')
+
+    assert call(
+        app, '/admin/delivery-operations', headers=customer
+    ).status_code == 403
+
+    # A failed item remains out for delivery and records each attempt.
+    assert call(
+        app, '/seller/items/' + critical_id + '/pack',
+        'post', {}, seller
+    ).status_code == 200
+    assert call(
+        app, '/admin/items/' + critical_id + '/assign',
+        'post', {'courier_id': 'delivery'}, admin
+    ).status_code == 200
+    assert call(
+        app, '/delivery/tasks/' + critical_id,
+        'post', {'action': 'start'}, rider
+    ).status_code == 200
+
+    for reason in (
+        'Customer unavailable on first attempt',
+        'Customer unavailable on second attempt',
+    ):
+        result = call(
+            app, '/delivery/tasks/' + critical_id,
+            'post', {'action': 'attempt_failed', 'reason': reason}, rider
+        )
+        assert result.status_code == 200, result.json
+
+    # A second item is packed but has not been assigned to a courier.
+    assert call(
+        app, '/seller/items/' + warning_id + '/pack',
+        'post', {}, seller
+    ).status_code == 200
+
+    # Complete a third item to exercise seven-day delivery performance.
+    fulfill(app, delivered_id, customer)
+
+    current = int(time.time())
+    with transaction(True) as db:
+        db.execute(
+            "UPDATE audit SET created=? WHERE action='delivery.start' AND entity=?",
+            (current - 49 * 3600, critical_id)
+        )
+        db.execute(
+            "UPDATE audit SET created=? WHERE action='item.pack' AND entity=?",
+            (current - 25 * 3600, warning_id)
+        )
+        db.execute(
+            "UPDATE audit SET created=? WHERE action='delivery.start' AND entity=?",
+            (current - 2 * 3600, delivered_id)
+        )
+
+    response = call(app, '/admin/delivery-operations', headers=admin)
+    assert response.status_code == 200, response.json
+
+    data = response.json
+    assert data['thresholds'] == {
+        'warning_hours': 24,
+        'critical_hours': 48,
+        'performance_window_days': 7,
+    }
+
+    summary = data['summary']
+    assert summary['packed_pending'] == 1
+    assert summary['out_for_delivery'] == 1
+    assert summary['overdue_24h'] == 2
+    assert summary['critical_48h'] == 1
+    assert summary['repeat_failure_items'] == 1
+    assert summary['unassigned_packed'] == 1
+    assert summary['delivered_last_7d'] == 1
+    assert 1.9 <= summary['avg_out_for_delivery_hours_7d'] <= 2.1
+
+    rows = {item['item_id']: item for item in data['items']}
+    assert rows[critical_id]['ageing_bucket'] == 'critical_48h'
+    assert rows[critical_id]['age_hours'] >= 49
+    assert rows[critical_id]['attempt_count'] == 2
+    assert rows[critical_id]['repeat_failure'] is True
+    assert rows[critical_id]['latest_reason'] == 'Customer unavailable on second attempt'
+
+    assert rows[warning_id]['ageing_bucket'] == 'watch_24h'
+    assert rows[warning_id]['age_hours'] >= 25
+    assert rows[warning_id]['courier_id'] is None
+
+    assert delivered_id not in rows
