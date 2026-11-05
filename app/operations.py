@@ -1,4 +1,7 @@
-from flask import Blueprint,g,request
+import csv
+import io
+from datetime import datetime, timedelta, timezone
+from flask import Blueprint,g,request,Response
 from .core import *
 bp=Blueprint('operations',__name__)
 
@@ -273,6 +276,280 @@ def delivery_operations():
             'summary': summary,
             'items': items,
         }
+
+
+def delivery_analytics_report():
+    current = now()
+    today = datetime.fromtimestamp(current, timezone.utc).date()
+
+    from_date = request.args.get('from', '').strip()
+    to_date = request.args.get('to', '').strip()
+
+    def parse_date(value, label):
+        try:
+            parsed = datetime.strptime(value, '%Y-%m-%d')
+            if parsed.strftime('%Y-%m-%d') != value:
+                fail('Invalid ' + label + ' date; use YYYY-MM-DD')
+            return parsed.date()
+        except ValueError:
+            fail('Invalid ' + label + ' date; use YYYY-MM-DD')
+
+    start_date = (
+        parse_date(from_date, 'start')
+        if from_date else today - timedelta(days=29)
+    )
+    end_date = (
+        parse_date(to_date, 'end')
+        if to_date else today
+    )
+
+    if start_date > end_date:
+        fail('Start date must not be after end date')
+    if (end_date - start_date).days > 365:
+        fail('Date range cannot exceed 366 days')
+
+    start_timestamp = int(
+        datetime.combine(start_date, datetime.min.time(), timezone.utc).timestamp()
+    )
+    end_timestamp = int(
+        datetime.combine(
+            end_date + timedelta(days=1),
+            datetime.min.time(),
+            timezone.utc
+        ).timestamp()
+    )
+
+    with transaction() as db:
+        couriers = db.all(
+            "SELECT id,name,email,status FROM users "
+            "WHERE role='delivery' ORDER BY name,id"
+        )
+
+        stats = {}
+        for courier in couriers:
+            stats[courier['id']] = {
+                'courier_id': courier['id'],
+                'courier_name': courier['name'],
+                'email': courier['email'],
+                'status': courier['status'],
+                'assigned': 0,
+                'successful': 0,
+                'failed_attempts': 0,
+                'pending': 0,
+                'repeat_failure_items': 0,
+                'avg_completion_minutes': None,
+                'success_percent': 0,
+                'failure_percent': 0,
+            }
+
+        pending = db.all(
+            """
+            SELECT courier_id,COUNT(*) AS total
+            FROM order_items
+            WHERE status IN ('packed','out_for_delivery')
+              AND courier_id IS NOT NULL
+              AND courier_id <> ''
+            GROUP BY courier_id
+            """
+        )
+        for row in pending:
+            if row['courier_id'] in stats:
+                stats[row['courier_id']]['pending'] = row['total']
+
+        events = db.all(
+            """
+            SELECT id,actor,action,entity,detail,created
+            FROM audit
+            WHERE created >= ? AND created < ?
+              AND action IN (
+                'delivery.assign',
+                'delivery.start',
+                'delivery.attempt_failed',
+                'delivery.complete'
+              )
+            ORDER BY created ASC,id ASC
+            """,
+            (start_timestamp, end_timestamp)
+        )
+
+        starts = {}
+        failures_by_item_courier = {}
+        failure_reasons = {}
+        daily_failures = {}
+        completion_durations = {}
+
+        # Collect starts before processing completions. Multiple events can
+        # share the same Unix-second timestamp, so audit ID ordering must not
+        # determine whether a matching start is visible to a completion.
+        for event in events:
+            if event['action'] == 'delivery.start':
+                starts.setdefault(
+                    (event['entity'], event['actor']), []
+                ).append(event['created'])
+
+        for event in events:
+            action = event['action']
+            courier_id = (
+                event['detail'] if action == 'delivery.assign'
+                else event['actor']
+            )
+
+            if action == 'delivery.assign':
+                if courier_id in stats:
+                    stats[courier_id]['assigned'] += 1
+
+            elif action == 'delivery.start':
+                continue
+
+            elif action == 'delivery.attempt_failed':
+                if courier_id in stats:
+                    stats[courier_id]['failed_attempts'] += 1
+                    key = (event['entity'], courier_id)
+                    failures_by_item_courier[key] = (
+                        failures_by_item_courier.get(key, 0) + 1
+                    )
+
+                reason = event['detail'].strip() or 'Unspecified'
+                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+
+                day = datetime.fromtimestamp(
+                    event['created'], timezone.utc
+                ).date().isoformat()
+                daily_failures[day] = daily_failures.get(day, 0) + 1
+
+            elif action == 'delivery.complete':
+                if courier_id in stats:
+                    stats[courier_id]['successful'] += 1
+
+                    matching_starts = starts.get(
+                        (event['entity'], courier_id), []
+                    )
+                    earlier_starts = [
+                        timestamp for timestamp in matching_starts
+                        if timestamp <= event['created']
+                    ]
+                    if earlier_starts:
+                        duration = max(0, event['created'] - max(earlier_starts))
+                        completion_durations.setdefault(courier_id, []).append(
+                            duration
+                        )
+
+        for (item_id, courier_id), count in failures_by_item_courier.items():
+            if count >= 2 and courier_id in stats:
+                stats[courier_id]['repeat_failure_items'] += 1
+
+        for courier_id, values in completion_durations.items():
+            stats[courier_id]['avg_completion_minutes'] = round(
+                sum(values) / len(values) / 60, 1
+            )
+
+        for item in stats.values():
+            attempts = item['successful'] + item['failed_attempts']
+            if attempts:
+                item['success_percent'] = round(
+                    item['successful'] * 100 / attempts, 1
+                )
+                item['failure_percent'] = round(
+                    item['failed_attempts'] * 100 / attempts, 1
+                )
+
+        courier_rows = list(stats.values())
+        total_assigned = sum(row['assigned'] for row in courier_rows)
+        total_successful = sum(row['successful'] for row in courier_rows)
+        total_failed = sum(row['failed_attempts'] for row in courier_rows)
+        total_pending = sum(row['pending'] for row in courier_rows)
+        total_attempts = total_successful + total_failed
+
+        daily_rows = []
+        day = start_date
+        while day <= end_date:
+            key = day.isoformat()
+            daily_rows.append({
+                'date': key,
+                'failed_attempts': daily_failures.get(key, 0),
+            })
+            day += timedelta(days=1)
+
+        return {
+            'from': start_date.isoformat(),
+            'to': end_date.isoformat(),
+            'generated_at': current,
+            'summary': {
+                'couriers': len(courier_rows),
+                'assigned': total_assigned,
+                'successful': total_successful,
+                'failed_attempts': total_failed,
+                'pending': total_pending,
+                'repeat_failure_items': sum(
+                    row['repeat_failure_items'] for row in courier_rows
+                ),
+                'success_percent': round(
+                    total_successful * 100 / total_attempts, 1
+                ) if total_attempts else 0,
+                'failure_percent': round(
+                    total_failed * 100 / total_attempts, 1
+                ) if total_attempts else 0,
+            },
+            'couriers': courier_rows,
+            'daily_failures': daily_rows,
+            'failure_reasons': [
+                {'reason': reason, 'count': count}
+                for reason, count in sorted(
+                    failure_reasons.items(),
+                    key=lambda item: (-item[1], item[0].lower())
+                )
+            ],
+        }
+
+
+@bp.get('/api/admin/delivery-analytics')
+@auth('admin')
+def delivery_analytics():
+    return delivery_analytics_report()
+
+
+@bp.get('/api/admin/delivery-analytics.csv')
+@auth('admin')
+def delivery_analytics_csv():
+    report = delivery_analytics_report()
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        'Courier', 'Email', 'Status', 'Assigned',
+        'Successful', 'Failed Attempts', 'Currently Pending (Live Snapshot)',
+        'Repeat Failure Items', 'Success %', 'Failure %',
+        'Average Completion Minutes'
+    ])
+
+    for row in report['couriers']:
+        writer.writerow([
+            row['courier_name'],
+            row['email'],
+            row['status'],
+            row['assigned'],
+            row['successful'],
+            row['failed_attempts'],
+            row['pending'],
+            row['repeat_failure_items'],
+            row['success_percent'],
+            row['failure_percent'],
+            row['avg_completion_minutes']
+        ])
+
+    filename = (
+        'delivery-analytics-' + report['from'] + '-to-' +
+        report['to'] + '.csv'
+    )
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': 'attachment; filename="' + filename + '"',
+            'Cache-Control': 'no-store',
+        }
+    )
 
 
 @bp.post('/api/admin/stores/<id>')

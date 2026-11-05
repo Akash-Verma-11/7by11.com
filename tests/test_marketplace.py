@@ -1235,3 +1235,127 @@ def test_admin_delivery_operations_ageing_repeats_and_performance(app):
     assert rows[warning_id]['courier_id'] is None
 
     assert delivered_id not in rows
+
+
+# Phase 3.11: advanced delivery analytics and CSV reporting
+def test_admin_delivery_analytics_courier_attribution_and_csv(app):
+    customer = login(app)
+    admin = login(app, 'admin')
+    seller = login(app, 'seller')
+    rider = login(app, 'delivery')
+
+    failed_order, _ = buy(
+        app, customer, key='analytics-failed-order-123'
+    )
+    completed_order, _ = buy(
+        app, customer, key='analytics-completed-order-123'
+    )
+
+    assert failed_order.status_code == 201, failed_order.json
+    assert completed_order.status_code == 201, completed_order.json
+
+    failed_id = failed_order.json['items'][0]['id']
+    completed_id = completed_order.json['items'][0]['id']
+
+    # First courier assignment and two failed attempts.
+    assert call(
+        app, '/seller/items/' + failed_id + '/pack',
+        'post', {}, seller
+    ).status_code == 200
+
+    assert call(
+        app, '/admin/items/' + failed_id + '/assign',
+        'post', {'courier_id': 'delivery'}, admin
+    ).status_code == 200
+
+    assert call(
+        app, '/delivery/tasks/' + failed_id,
+        'post', {'action': 'start'}, rider
+    ).status_code == 200
+
+    for reason in (
+        'Customer unavailable on first attempt',
+        'Customer unavailable on second attempt',
+    ):
+        response = call(
+            app, '/delivery/tasks/' + failed_id,
+            'post', {'action': 'attempt_failed', 'reason': reason}, rider
+        )
+        assert response.status_code == 200, response.json
+
+    # A separate delivery completes successfully.
+    fulfill(app, completed_id, customer)
+
+    # Non-admin users must not access analytics.
+    denied = call(
+        app, '/admin/delivery-analytics', headers=customer
+    )
+    assert denied.status_code == 403
+
+    response = call(
+        app, '/admin/delivery-analytics', headers=admin
+    )
+    assert response.status_code == 200, response.json
+
+    data = response.json
+    summary = data['summary']
+
+    assert summary['assigned'] == 2
+    assert summary['successful'] == 1
+    assert summary['failed_attempts'] == 2
+    assert summary['pending'] == 1
+    assert summary['repeat_failure_items'] == 1
+    assert summary['success_percent'] == 33.3
+    assert summary['failure_percent'] == 66.7
+
+    courier = next(
+        row for row in data['couriers']
+        if row['courier_id'] == 'delivery'
+    )
+    assert courier['assigned'] == 2
+    assert courier['successful'] == 1
+    assert courier['failed_attempts'] == 2
+    assert courier['pending'] == 1
+    assert courier['repeat_failure_items'] == 1
+    assert courier['avg_completion_minutes'] is not None
+    assert courier['avg_completion_minutes'] >= 0
+
+    reasons = {
+        row['reason']: row['count']
+        for row in data['failure_reasons']
+    }
+    assert reasons['Customer unavailable on first attempt'] == 1
+    assert reasons['Customer unavailable on second attempt'] == 1
+
+    assert data['daily_failures']
+    assert sum(
+        row['failed_attempts'] for row in data['daily_failures']
+    ) == 2
+
+    # Date filters and invalid-date handling.
+    filtered = call(
+        app,
+        '/admin/delivery-analytics?from=' + data['from'] +
+        '&to=' + data['to'],
+        headers=admin
+    )
+    assert filtered.status_code == 200, filtered.json
+    assert filtered.json['summary'] == summary
+
+    invalid = call(
+        app, '/admin/delivery-analytics?from=2026-99-99',
+        headers=admin
+    )
+    assert invalid.status_code == 422
+
+    # CSV export contains the courier report and attachment headers.
+    csv_response = call(
+        app, '/admin/delivery-analytics.csv', headers=admin
+    )
+    assert csv_response.status_code == 200
+    assert csv_response.mimetype == 'text/csv'
+    assert 'attachment;' in csv_response.headers['Content-Disposition']
+    assert 'Courier,Email,Status,Assigned' in csv_response.get_data(
+        as_text=True
+    )
+    assert 'delivery@example.com' in csv_response.get_data(as_text=True)

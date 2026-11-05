@@ -44,3 +44,17 @@ Verification date: 4 November 2026.
 - No schema migration was required.
 
 The 24-hour and 48-hour values are internal operational monitoring thresholds, not contractual delivery SLAs. jsdom checks validate application behavior, not visual browser layout. Live carrier integrations, production deployment and infrastructure-level verification remain outside this phase.
+
+## Phase 3.11 — Advanced delivery analytics
+
+Verification date: 5 November 2026.
+
+- Backend: all 51 pytest tests passed on the isolated SQLite test database (`51 passed`).
+- JavaScript syntax checks passed for `web/app.js` and `tests/ui-smoke.cjs`.
+- `git diff --check` passed.
+- UI integration: all eight seeded role workspaces and the existing customer, seller, warehouse and delivery workflows passed.
+- Analytics coverage: admin report rendering, courier performance data, date-range filtering and refresh, CSV endpoint request and download behavior.
+- Existing delivery exception handling, reassignment and Phase 3.10 SLA dashboard checks continued to pass.
+- No schema migration was required.
+
+The report uses audit events and current item assignments. It does not integrate with external courier systems or provide live tracking. jsdom validates DOM behavior and application interactions, not visual layout across real browsers or devices. PostgreSQL CI, Docker/Compose deployment, image scanning, production load/security testing and live integrations remain separate validation tasks.

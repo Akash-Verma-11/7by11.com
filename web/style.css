@@ -60,3 +60,75 @@
   .tracking-current{align-items:flex-start;flex-direction:column}
   .tracking-event{padding-left:22px}
 }
+
+
+/* Phase 3.11: advanced delivery analytics */
+.analytics-filters{
+  align-items:end;
+  margin:18px 0;
+}
+.analytics-filters label{
+  min-width:190px;
+}
+.analytics-email{
+  display:block;
+  margin-top:4px;
+  color:var(--muted);
+  font-size:12px;
+}
+.analytics-chart{
+  display:grid;
+  gap:9px;
+  margin:14px 0;
+}
+.analytics-bar-row{
+  display:grid;
+  grid-template-columns:105px minmax(50px,1fr) 30px;
+  align-items:center;
+  gap:10px;
+  font-size:12px;
+}
+.analytics-bar-track{
+  height:12px;
+  overflow:hidden;
+  border-radius:8px;
+  background:var(--cream);
+}
+.analytics-bar{
+  height:100%;
+  min-width:0;
+  border-radius:8px;
+  background:var(--green);
+}
+.analytics-reasons{
+  list-style:none;
+  margin:12px 0;
+  padding:0;
+}
+.analytics-reasons li{
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  padding:10px 12px;
+  border-bottom:1px solid var(--line);
+}
+#delivery-analytics-panel h4{
+  margin:24px 0 10px;
+}
+@media(max-width:620px){
+  #delivery-analytics-panel>.row.between{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  .analytics-filters{
+    align-items:stretch;
+    flex-direction:column;
+  }
+  .analytics-filters label{
+    width:100%;
+  }
+  .analytics-bar-row{
+    grid-template-columns:85px minmax(35px,1fr) 22px;
+    gap:7px;
+  }
+}

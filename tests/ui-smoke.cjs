@@ -10,7 +10,7 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
 (async()=>{let dom;try{
  for(let i=0;i<80;i++){try{await fetch(base+'/ready');break;}catch{await delay(100);}}
  const errors=[],vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));
- dom=await JSDOM.fromURL(base,{resources:'usable',runScripts:'dangerously',virtualConsole:vc,beforeParse(w){w.fetch=(url,opts)=>fetch(new URL(url,base),opts);w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;};w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};w.crypto.randomUUID=require('crypto').randomUUID;}});
+ dom=await JSDOM.fromURL(base,{resources:'usable',runScripts:'dangerously',virtualConsole:vc,beforeParse(w){w.__requests=[];w.__downloads=[];w.fetch=(url,opts)=>{const target=new URL(url,base);w.__requests.push({url:target.pathname+target.search,method:opts?.method||'GET'});return fetch(target,opts);};w.URL.createObjectURL=()=> 'blob:delivery-analytics';w.URL.revokeObjectURL=()=>{};w.HTMLAnchorElement.prototype.click=function(){w.__downloads.push(this.download);};w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;};w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};w.crypto.randomUUID=require('crypto').randomUUID;}});
  const w=dom.window,d=w.document;
  await until(()=>d.querySelectorAll('.product').length===6,'catalog');
 
@@ -423,6 +423,63 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
     ?.textContent.includes('Out for delivery'),
   'Admin delivery operations metrics'
  );
+
+
+ await until(
+  ()=>d.querySelector('#delivery-analytics-summary')
+    ?.textContent.includes('Success rate')
+   && d.querySelector('#delivery-analytics-couriers')
+    ?.textContent.includes('delivery@example.com'),
+  'Admin delivery analytics and courier comparison'
+ );
+
+ const analyticsPanel=d.querySelector('#delivery-analytics-panel');
+ if(!analyticsPanel)throw Error('Advanced delivery analytics panel is missing');
+ if(!analyticsPanel.querySelector('#delivery-analytics-trends')
+   || !analyticsPanel.querySelector('#delivery-analytics-reasons'))
+  throw Error('Delivery failure trend or reason section is missing');
+
+ const analyticsFrom=d.querySelector('#delivery-analytics-from');
+ const analyticsTo=d.querySelector('#delivery-analytics-to');
+ if(!analyticsFrom?.value || !analyticsTo?.value)
+  throw Error('Delivery analytics date range was not initialized');
+
+ const todayUtc=new Date().toISOString().slice(0,10);
+ analyticsFrom.value=todayUtc;
+ analyticsTo.value=todayUtc;
+ d.querySelector('#refresh-delivery-analytics').click();
+
+ await until(
+  ()=>w.__requests.some(item =>
+    item.url.startsWith('/api/admin/delivery-analytics?from='+todayUtc)
+  ),
+  'date-filtered delivery analytics request'
+ );
+
+ await until(
+  ()=>d.querySelector('#delivery-analytics-summary')
+    ?.textContent.includes('Report period: '+todayUtc+' to '+todayUtc),
+  'date-filtered delivery analytics response'
+ );
+
+ d.querySelector('#export-delivery-analytics').click();
+
+ await until(
+  ()=>w.__requests.some(item =>
+    item.url.startsWith('/api/admin/delivery-analytics.csv?from='+todayUtc)
+  ) && w.__downloads.some(name =>
+    name==='delivery-analytics-'+todayUtc+'-to-'+todayUtc+'.csv'
+  ),
+  'authenticated delivery analytics CSV export'
+ );
+
+ const csvRequest=w.__requests.find(item =>
+  item.url.startsWith('/api/admin/delivery-analytics.csv?from='+todayUtc)
+ );
+ if(!csvRequest || csvRequest.method!=='GET')
+  throw Error('Delivery analytics CSV request was not issued correctly');
+
+ console.log('PASS admin advanced delivery analytics: summary, courier comparison, date filter and CSV export');
 
  const slaSummary=d.querySelector('#delivery-operations-summary');
  const slaStats=[...slaSummary.querySelectorAll('.stat')]

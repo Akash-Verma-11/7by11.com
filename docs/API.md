@@ -65,6 +65,8 @@ Responses: 200 success, 201 created, 401 sign in required, 403 forbidden, 404 ab
 | `GET /api/admin/overview` | admin | None / see notes |
 | `GET /api/admin/delivery-operations` | admin | None / see notes |
 | `GET /api/admin/delivery-exceptions` | admin | None / see notes |
+| `GET /api/admin/delivery-analytics` | admin | from, to (optional UTC dates) |
+| `GET /api/admin/delivery-analytics.csv` | admin | from, to (optional UTC dates) |
 | `POST /api/admin/stores/<id>` | admin | reason, status |
 | `POST /api/admin/products/<id>` | admin | reason, status |
 | `POST /api/admin/users/<id>` | admin | reason, status |
@@ -95,3 +97,22 @@ Checkout requires Idempotency-Key with 8–100 characters, address with 10–500
 Store member permission is catalog, fulfillment, finance or remove. Product lifecycle is draft, active, paused, archived; moderation is pending, approved, suppressed or rejected. Delivery actions are start, attempt_failed (reason), complete (code and boolean cod_collected). Return resolution is receive or refund (disposition restock or quarantine). Payout approval status is paid_demo or rejected.
 
 The field inventory reports fields read by each route, not that every field is mandatory. Exact defaults, limits and state transitions are implemented in the named module. No OpenAPI contract or SDK is included.
+
+## Delivery analytics report — Phase 3.11
+
+Both analytics endpoints are admin-only.
+
+`GET /api/admin/delivery-analytics` returns a JSON report. Optional `from` and `to` query parameters accept `YYYY-MM-DD` UTC dates. If omitted, the report covers the latest 30 days through the current UTC date, inclusive. The start date must not be after the end date, and the requested range cannot exceed 366 days.
+
+The report includes:
+
+- `summary`: courier count, assigned deliveries, successful deliveries, failed attempts, current pending deliveries (live snapshot), repeat-failure items, success percentage and failure percentage.
+- `couriers`: courier ID, name, email, status, assigned count, successful count, failed-attempt count, current pending count (live snapshot), repeat-failure items, average completion time in minutes, success percentage and failure percentage.
+- `daily_failures`: daily failed-attempt counts for every date in the selected range.
+- `failure_reasons`: failure reason and occurrence count, ordered by frequency.
+
+Success and failure percentages use successful deliveries plus failed attempts as their denominator. Pending deliveries are a live snapshot of currently packed and out-for-delivery items grouped by their current courier assignment; they are not restricted to the selected reporting date range. Repeat failures count item/courier pairs with at least two failed attempts in the selected period. Average completion time matches delivery start and completion events for the same item and courier.
+
+`GET /api/admin/delivery-analytics.csv` accepts the same date filters and exports courier-level performance columns: courier, email, status, assigned, successful, failed attempts, currently pending (live snapshot), repeat-failure items, success percentage, failure percentage and average completion minutes. The response is a downloadable CSV attachment.
+
+These analytics are derived from marketplace audit events and current order-item state. They are operational reporting metrics, not carrier-confirmed delivery data or live GPS information.

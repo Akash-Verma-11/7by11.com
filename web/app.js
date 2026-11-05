@@ -282,6 +282,155 @@ async function refreshDeliveryOperations() {
   }
 }
 
+
+function analyticsDateRange() {
+  const today = new Date().toISOString().slice(0, 10);
+  const start = new Date(Date.now() - 29 * 86400000)
+    .toISOString().slice(0, 10);
+  return { from: start, to: today };
+}
+
+function analyticsQuery() {
+  const from = $('#delivery-analytics-from')?.value || '';
+  const to = $('#delivery-analytics-to')?.value || '';
+
+  if (!from || !to) throw Error('Select both report dates.');
+  if (from > to) throw Error('Start date must not be after end date.');
+
+  const days = (Date.parse(to + 'T00:00:00Z') -
+    Date.parse(from + 'T00:00:00Z')) / 86400000;
+
+  if (days > 365) throw Error('Date range cannot exceed 366 days.');
+
+  return new URLSearchParams({ from, to }).toString();
+}
+
+function renderDeliveryAnalytics(data) {
+  const summary = data.summary;
+  const summaryNode = $('#delivery-analytics-summary');
+  const couriersNode = $('#delivery-analytics-couriers');
+  const trendsNode = $('#delivery-analytics-trends');
+  const reasonsNode = $('#delivery-analytics-reasons');
+
+  if (!summaryNode || !couriersNode || !trendsNode || !reasonsNode) return;
+
+  summaryNode.innerHTML = `
+    <div class="stats">
+      <div class="stat">Couriers<strong>${esc(summary.couriers)}</strong></div>
+      <div class="stat">Assigned deliveries<strong>${esc(summary.assigned)}</strong></div>
+      <div class="stat">Successful deliveries<strong>${esc(summary.successful)}</strong></div>
+      <div class="stat">Failed attempts<strong>${esc(summary.failed_attempts)}</strong></div>
+      <div class="stat">Currently pending<strong>${esc(summary.pending)}</strong></div>
+      <div class="stat">Repeat-failure items<strong>${esc(summary.repeat_failure_items)}</strong></div>
+      <div class="stat">Success rate<strong>${esc(summary.success_percent)}%</strong></div>
+      <div class="stat">Failure rate<strong>${esc(summary.failure_percent)}%</strong></div>
+    </div>
+    <p class="muted">Report period: ${esc(data.from)} to ${esc(data.to)}</p>`;
+
+  couriersNode.innerHTML = data.couriers.length ? `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Courier</th><th>Status</th><th>Assigned</th>
+          <th>Successful</th><th>Failed</th><th>Currently pending</th>
+          <th>Repeat failures</th><th>Success</th><th>Failure</th>
+          <th>Avg. completion (min)</th>
+        </tr></thead>
+        <tbody>${data.couriers.map(c => `
+          <tr>
+            <td><strong>${esc(c.courier_name)}</strong><small class="analytics-email">${esc(c.email)}</small></td>
+            <td>${badge(c.status)}</td>
+            <td>${esc(c.assigned)}</td>
+            <td>${esc(c.successful)}</td>
+            <td>${esc(c.failed_attempts)}</td>
+            <td>${esc(c.pending)}</td>
+            <td>${esc(c.repeat_failure_items)}</td>
+            <td>${esc(c.success_percent)}%</td>
+            <td>${esc(c.failure_percent)}%</td>
+            <td>${c.avg_completion_minutes === null ? '—' : esc(c.avg_completion_minutes)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : '<div class="empty">No courier records found.</div>';
+
+  const maxFailures = Math.max(
+    1, ...data.daily_failures.map(day => Number(day.failed_attempts))
+  );
+
+  trendsNode.innerHTML = data.daily_failures.length ? `
+    <div class="analytics-chart" role="img" aria-label="Daily failed delivery attempts">
+      ${data.daily_failures.map(day => {
+        const count = Number(day.failed_attempts);
+        const width = count ? Math.max(2, count / maxFailures * 100) : 0;
+        return `<div class="analytics-bar-row">
+          <span>${esc(day.date)}</span>
+          <div class="analytics-bar-track">
+            <div class="analytics-bar" style="width:${width}%"></div>
+          </div>
+          <strong>${esc(count)}</strong>
+        </div>`;
+      }).join('')}
+    </div>` : '<div class="empty">No daily failure data.</div>';
+
+  reasonsNode.innerHTML = data.failure_reasons.length
+    ? `<ul class="analytics-reasons">${data.failure_reasons.map(reason =>
+        `<li><span>${esc(reason.reason)}</span><strong>${esc(reason.count)}</strong></li>`
+      ).join('')}</ul>`
+    : '<div class="empty">No delivery failures in this period.</div>';
+}
+
+async function refreshDeliveryAnalytics() {
+  const summary = $('#delivery-analytics-summary');
+  const couriers = $('#delivery-analytics-couriers');
+  if (!summary || !couriers) return;
+
+  try {
+    const query = analyticsQuery();
+    summary.innerHTML = '<p>Loading delivery analytics...</p>';
+    couriers.innerHTML = '<p>Loading courier comparison...</p>';
+
+    const data = await api('/admin/delivery-analytics?' + query);
+    renderDeliveryAnalytics(data);
+  } catch (error) {
+    summary.innerHTML = `<p class="error">${esc(error.message)}</p>`;
+    couriers.innerHTML = '';
+    $('#delivery-analytics-trends').innerHTML = '';
+    $('#delivery-analytics-reasons').innerHTML = '';
+  }
+}
+
+async function exportDeliveryAnalyticsCsv() {
+  try {
+    const query = analyticsQuery();
+    const response = await fetch(
+      '/api/admin/delivery-analytics.csv?' + query,
+      { headers: token ? { Authorization: 'Bearer ' + token } : {} }
+    );
+
+    if (!response.ok) {
+      let message = 'CSV export failed.';
+      try {
+        const body = await response.json();
+        message = body.error || message;
+      } catch {}
+      throw Error(message);
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `delivery-analytics-${$('#delivery-analytics-from').value}-to-${$('#delivery-analytics-to').value}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast('Delivery analytics CSV exported.');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 async function admin() {
   const d = await api('/admin/overview');
 
@@ -328,6 +477,47 @@ async function admin() {
       </div>
       <div id="delivery-operations-list">
         <p>Loading pending delivery items...</p>
+      </div>
+    </section>
+
+    <section class="panel" id="delivery-analytics-panel">
+      <div class="row between">
+        <div>
+          <h3>Advanced delivery analytics</h3>
+          <p class="demo">Courier performance, delivery outcomes and failure trends for the selected UTC date range.</p>
+        </div>
+        <div class="row">
+          <button id="refresh-delivery-analytics" type="button">Refresh analytics</button>
+          <button id="export-delivery-analytics" type="button">Export CSV</button>
+        </div>
+      </div>
+
+      <div class="row analytics-filters">
+        <label>From
+          <input id="delivery-analytics-from" type="date" required>
+        </label>
+        <label>To
+          <input id="delivery-analytics-to" type="date" required>
+        </label>
+      </div>
+
+      <div id="delivery-analytics-summary">
+        <p>Loading delivery analytics...</p>
+      </div>
+
+      <h4>Courier performance comparison</h4>
+      <div id="delivery-analytics-couriers">
+        <p>Loading courier comparison...</p>
+      </div>
+
+      <h4>Daily delivery failures</h4>
+      <div id="delivery-analytics-trends">
+        <p>Loading failure trends...</p>
+      </div>
+
+      <h4>Common failure reasons</h4>
+      <div id="delivery-analytics-reasons">
+        <p>Loading failure reasons...</p>
       </div>
     </section>
 
@@ -415,6 +605,11 @@ async function admin() {
   $('#finance-link').onclick = () => finance().catch(e => toast(e.message));
   $('#refresh-exceptions').onclick = () => refreshDeliveryExceptions();
   $('#refresh-delivery-operations').onclick = () => refreshDeliveryOperations();
+  const analyticsDates = analyticsDateRange();
+  $('#delivery-analytics-from').value = analyticsDates.from;
+  $('#delivery-analytics-to').value = analyticsDates.to;
+  $('#refresh-delivery-analytics').onclick = () => refreshDeliveryAnalytics();
+  $('#export-delivery-analytics').onclick = () => exportDeliveryAnalyticsCsv();
   $('#delivery-age-filter').onchange = event => {
     if (deliveryOperationsData) {
       renderDeliveryOperations(deliveryOperationsData, event.target.value);
@@ -423,6 +618,7 @@ async function admin() {
 
   await refreshDeliveryExceptions();
   await refreshDeliveryOperations();
+  await refreshDeliveryAnalytics();
 }
 async function delivery(){const ts=await api('/delivery/tasks');$('#main').innerHTML=`<span class="eyebrow">DELIVERY WORKSPACE</span><h1>Your route today.</h1>${ts.map(t=>`<section class="panel"><h3>${esc(t.name)} × ${t.quantity}</h3><p>${esc(t.address)}</p><p>${badge(t.status)} · ${t.payment==='cod_due'?'Collect cash '+money(t.total):'Demo prepaid'}</p>${t.status==='packed'?`<button class="primary" data-start="${t.id}">Confirm pickup & start delivery</button>`:`<button class="primary" data-complete="${t.id}" data-cod="${t.payment==='cod_due'}">Complete with customer code</button><button data-failed="${t.id}">Failed attempt</button>`}</section>`).join('')||'<div class="empty">No assigned delivery tasks.</div>'}`;}
 async function warehouse(){const d=await api('/warehouse/tasks');$('#main').innerHTML='<h1>Warehouse operations</h1>'+itemTable(d.items,i=>`<button data-track="${i.id}">Track item</button> <button data-pack="${i.id}">Confirm packed</button>`)+returnCards(d.returns);}
