@@ -72,9 +72,7 @@ def delivery_exceptions():
 
 
 
-@bp.get('/api/admin/delivery-operations')
-@auth('admin')
-def delivery_operations():
+def _delivery_operations_report():
     with transaction() as db:
         current = now()
         warning_seconds = 24 * 3600
@@ -276,6 +274,12 @@ def delivery_operations():
             'summary': summary,
             'items': items,
         }
+
+
+@bp.get('/api/admin/delivery-operations')
+@auth('admin')
+def delivery_operations():
+    return _delivery_operations_report()
 
 
 def delivery_analytics_report():
@@ -550,6 +554,200 @@ def delivery_analytics_csv():
             'Cache-Control': 'no-store',
         }
     )
+
+
+@bp.get('/api/admin/delivery-intelligence')
+@auth('admin')
+def delivery_intelligence():
+    report = delivery_analytics_report()
+    start_date = datetime.strptime(report['from'], '%Y-%m-%d').date()
+    end_date = datetime.strptime(report['to'], '%Y-%m-%d').date()
+    period_days = (end_date - start_date).days + 1
+
+    previous_end = start_date - timedelta(days=1)
+    previous_start = previous_end - timedelta(days=period_days - 1)
+    previous_from = int(datetime.combine(
+        previous_start, datetime.min.time(), timezone.utc
+    ).timestamp())
+    previous_to = int(datetime.combine(
+        start_date, datetime.min.time(), timezone.utc
+    ).timestamp())
+
+    with transaction() as db:
+        previous_events = db.all(
+            """
+            SELECT a.action, a.detail, COUNT(*) AS total
+            FROM audit a
+            LEFT JOIN users u
+              ON u.id = CASE
+                WHEN a.action = 'delivery.assign' THEN a.detail
+                ELSE a.actor
+              END
+            WHERE a.created >= ? AND a.created < ?
+              AND a.action IN (
+                'delivery.assign',
+                'delivery.start',
+                'delivery.attempt_failed',
+                'delivery.complete'
+              )
+              AND u.role = 'delivery'
+            GROUP BY a.action, a.detail
+            """,
+            (previous_from, previous_to)
+        )
+
+        previous_reason_events = db.all(
+            """
+            SELECT detail, COUNT(*) AS total
+            FROM audit
+            WHERE created >= ? AND created < ?
+              AND action = 'delivery.attempt_failed'
+            GROUP BY detail
+            """,
+            (previous_from, previous_to)
+        )
+
+    previous_successful = sum(
+        row['total'] for row in previous_events
+        if row['action'] == 'delivery.complete'
+    )
+    previous_failed = sum(
+        row['total'] for row in previous_events
+        if row['action'] == 'delivery.attempt_failed'
+    )
+    previous_attempts = previous_successful + previous_failed
+    previous_failure_rate = (
+        round(previous_failed * 100 / previous_attempts, 1)
+        if previous_attempts else 0
+    )
+
+    current = report['summary']
+    current_attempts = current['successful'] + current['failed_attempts']
+    current_failure_rate = (
+        round(current['failed_attempts'] * 100 / current_attempts, 1)
+        if current_attempts else 0
+    )
+
+    previous_reasons = {}
+    for row in previous_reason_events:
+        reason = (row['detail'] or '').strip() or 'Unspecified'
+        previous_reasons[reason] = (
+            previous_reasons.get(reason, 0) + row['total']
+        )
+
+    current_reason_total = sum(
+        row['count'] for row in report['failure_reasons']
+    )
+    previous_reason_total = sum(previous_reasons.values())
+
+    current_reasons = {
+        row['reason']: row['count']
+        for row in report['failure_reasons']
+    }
+
+    reason_intelligence = []
+    for reason in sorted(
+        set(current_reasons) | set(previous_reasons),
+        key=str.lower
+    ):
+        current_count = current_reasons.get(reason, 0)
+        previous_count = previous_reasons.get(reason, 0)
+        current_share = (
+            round(current_count * 100 / current_reason_total, 1)
+            if current_reason_total else 0
+        )
+        previous_share = (
+            round(previous_count * 100 / previous_reason_total, 1)
+            if previous_reason_total else 0
+        )
+        reason_intelligence.append({
+            'reason': reason,
+            'current_count': current_count,
+            'previous_count': previous_count,
+            'current_share_percent': current_share,
+            'previous_share_percent': previous_share,
+            'share_change_percentage_points': round(
+                current_share - previous_share, 1
+            ),
+        })
+
+    live = _delivery_operations_report()
+    courier_risks = {}
+
+    for item in live['items']:
+        key = item['courier_id'] or 'unassigned'
+        row = courier_risks.setdefault(key, {
+            'courier_id': item['courier_id'],
+            'courier_name': item['courier_name'] or 'Unassigned packed',
+            'pending_items': 0,
+            'watch_24h': 0,
+            'critical_48h': 0,
+            'repeat_failure_items': 0,
+            'unassigned_packed': 0,
+        })
+        row['pending_items'] += 1
+        if item['ageing_bucket'] == 'watch_24h':
+            row['watch_24h'] += 1
+        elif item['ageing_bucket'] == 'critical_48h':
+            row['critical_48h'] += 1
+        if item['repeat_failure']:
+            row['repeat_failure_items'] += 1
+        if item['status'] == 'packed' and not item['courier_id']:
+            row['unassigned_packed'] += 1
+
+    risk_rows = sorted(
+        courier_risks.values(),
+        key=lambda row: (
+            -row['critical_48h'],
+            -row['watch_24h'],
+            -row['repeat_failure_items'],
+            row['courier_name'].lower(),
+        )
+    )
+
+    return {
+        'period': {
+            'from': report['from'],
+            'to': report['to'],
+            'days': period_days,
+        },
+        'previous_period': {
+            'from': previous_start.isoformat(),
+            'to': previous_end.isoformat(),
+        },
+        'comparison': {
+            'current': {
+                'successful': current['successful'],
+                'failed_attempts': current['failed_attempts'],
+                'failure_percent': current_failure_rate,
+            },
+            'previous': {
+                'successful': previous_successful,
+                'failed_attempts': previous_failed,
+                'failure_percent': previous_failure_rate,
+            },
+            'change': {
+                'successful': current['successful'] - previous_successful,
+                'failed_attempts': current['failed_attempts'] - previous_failed,
+                'failure_percentage_points': round(
+                    current_failure_rate - previous_failure_rate, 1
+                ),
+            },
+            'previous_period_has_attempts': previous_attempts > 0,
+        },
+        'failure_reasons': reason_intelligence,
+        'live_risk': {
+            'generated_at': live['generated_at'],
+            'thresholds': live['thresholds'],
+            'summary': {
+                'overdue_24h': live['summary']['overdue_24h'],
+                'critical_48h': live['summary']['critical_48h'],
+                'repeat_failure_items': live['summary']['repeat_failure_items'],
+                'unassigned_packed': live['summary']['unassigned_packed'],
+            },
+            'couriers': risk_rows,
+        },
+    }
 
 
 @bp.post('/api/admin/stores/<id>')

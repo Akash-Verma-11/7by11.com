@@ -399,6 +399,146 @@ async function refreshDeliveryAnalytics() {
   }
 }
 
+
+function renderDeliveryIntelligence(data) {
+  const comparisonNode = $('#delivery-intelligence-comparison');
+  const reasonsNode = $('#delivery-intelligence-reasons');
+  const risksNode = $('#delivery-intelligence-risks');
+  const metaNode = $('#delivery-intelligence-meta');
+
+  if (!comparisonNode || !reasonsNode || !risksNode || !metaNode) return;
+
+  const comparison = data.comparison;
+  const current = comparison.current;
+  const previous = comparison.previous;
+  const change = comparison.change;
+  const signed = value => `${Number(value) > 0 ? '+' : ''}${esc(value)}`;
+  const rateChange = Number(change.failure_percentage_points);
+
+  metaNode.textContent =
+    `Current: ${data.period.from} to ${data.period.to} · ` +
+    `Previous: ${data.previous_period.from} to ${data.previous_period.to} · ` +
+    `${data.period.days} day(s) per period`;
+
+  comparisonNode.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Metric</th><th>Previous period</th>
+          <th>Current period</th><th>Change</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td>Successful deliveries</td>
+            <td>${esc(previous.successful)}</td>
+            <td>${esc(current.successful)}</td>
+            <td>${signed(change.successful)}</td>
+          </tr>
+          <tr>
+            <td>Failed attempts</td>
+            <td>${esc(previous.failed_attempts)}</td>
+            <td>${esc(current.failed_attempts)}</td>
+            <td>${signed(change.failed_attempts)}</td>
+          </tr>
+          <tr>
+            <td>Failure rate</td>
+            <td>${esc(previous.failure_percent)}%</td>
+            <td>${esc(current.failure_percent)}%</td>
+            <td>${rateChange > 0 ? '+' : ''}${esc(rateChange)} percentage points</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    ${comparison.previous_period_has_attempts
+      ? '<p class="muted">Both periods contain delivery attempts. Rate change is shown in percentage points.</p>'
+      : '<p class="muted">The previous period has no recorded delivery attempts; its failure rate is shown as 0% and rate comparison should be interpreted cautiously.</p>'}`;
+
+  reasonsNode.innerHTML = data.failure_reasons.length ? `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Failure reason</th><th>Previous count</th>
+          <th>Current count</th><th>Previous share</th>
+          <th>Current share</th><th>Share change</th>
+        </tr></thead>
+        <tbody>${data.failure_reasons.map(reason => {
+          const delta = Number(reason.share_change_percentage_points);
+          return `<tr>
+            <td>${esc(reason.reason)}</td>
+            <td>${esc(reason.previous_count)}</td>
+            <td>${esc(reason.current_count)}</td>
+            <td>${esc(reason.previous_share_percent)}%</td>
+            <td>${esc(reason.current_share_percent)}%</td>
+            <td>${delta > 0 ? '+' : ''}${esc(delta)} pp</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>` : '<div class="empty">No failure reasons recorded in either period.</div>';
+
+  const live = data.live_risk;
+  const liveSummary = live.summary;
+  const courierRows = live.couriers;
+
+  risksNode.innerHTML = `
+    <div class="stats">
+      <div class="stat">Over 24 hours<strong>${esc(liveSummary.overdue_24h)}</strong></div>
+      <div class="stat">Critical over 48 hours<strong>${esc(liveSummary.critical_48h)}</strong></div>
+      <div class="stat">Repeat-failure items<strong>${esc(liveSummary.repeat_failure_items)}</strong></div>
+      <div class="stat">Unassigned packed<strong>${esc(liveSummary.unassigned_packed)}</strong></div>
+    </div>
+    ${courierRows.length ? `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Courier</th><th>Pending</th><th>24–48h watch</th>
+            <th>48h+ critical</th><th>Repeat failures</th>
+            <th>Unassigned packed</th>
+          </tr></thead>
+          <tbody>${courierRows.map(courier => `
+            <tr>
+              <td>${esc(courier.courier_name)}</td>
+              <td>${esc(courier.pending_items)}</td>
+              <td>${esc(courier.watch_24h)}</td>
+              <td>${esc(courier.critical_48h)}</td>
+              <td>${esc(courier.repeat_failure_items)}</td>
+              <td>${esc(courier.unassigned_packed)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : '<div class="empty">No current pending courier risks.</div>'}
+    <p class="muted">Live operational snapshot · Warning: ${esc(live.thresholds.warning_hours)}h · Critical: ${esc(live.thresholds.critical_hours)}h · Updated: ${esc(new Date(live.generated_at * 1000).toLocaleString())}</p>`;
+}
+
+async function refreshDeliveryIntelligence() {
+  const comparison = $('#delivery-intelligence-comparison');
+  const reasons = $('#delivery-intelligence-reasons');
+  const risks = $('#delivery-intelligence-risks');
+  const meta = $('#delivery-intelligence-meta');
+  if (!comparison || !reasons || !risks || !meta) return;
+
+  try {
+    const query = analyticsQuery();
+    comparison.innerHTML = '<p>Loading period comparison...</p>';
+    reasons.innerHTML = '<p>Loading failure reason trends...</p>';
+    risks.innerHTML = '<p>Loading live courier risk...</p>';
+
+    const data = await api('/admin/delivery-intelligence?' + query);
+    renderDeliveryIntelligence(data);
+  } catch (error) {
+    comparison.innerHTML = `<p class="error">${esc(error.message)}</p>`;
+    reasons.innerHTML = '';
+    risks.innerHTML = '';
+    meta.textContent = '';
+  }
+}
+
+async function refreshDeliveryReports() {
+  await Promise.all([
+    refreshDeliveryAnalytics(),
+    refreshDeliveryIntelligence(),
+  ]);
+}
+
 async function exportDeliveryAnalyticsCsv() {
   try {
     const query = analyticsQuery();
@@ -519,6 +659,27 @@ async function admin() {
       <div id="delivery-analytics-reasons">
         <p>Loading failure reasons...</p>
       </div>
+
+      <div class="delivery-intelligence">
+        <h3>Delivery intelligence</h3>
+        <p class="demo">Historical comparisons use equal-length UTC periods. Courier risk is a live snapshot, not historical data.</p>
+        <p id="delivery-intelligence-meta" class="muted">Loading reporting periods...</p>
+
+        <h4>Period-over-period comparison</h4>
+        <div id="delivery-intelligence-comparison">
+          <p>Loading period comparison...</p>
+        </div>
+
+        <h4>Failure reason trends</h4>
+        <div id="delivery-intelligence-reasons">
+          <p>Loading failure reason trends...</p>
+        </div>
+
+        <h4>Live courier risk</h4>
+        <div id="delivery-intelligence-risks">
+          <p>Loading live courier risk...</p>
+        </div>
+      </div>
     </section>
 
     <section class="panel">
@@ -608,7 +769,7 @@ async function admin() {
   const analyticsDates = analyticsDateRange();
   $('#delivery-analytics-from').value = analyticsDates.from;
   $('#delivery-analytics-to').value = analyticsDates.to;
-  $('#refresh-delivery-analytics').onclick = () => refreshDeliveryAnalytics();
+  $('#refresh-delivery-analytics').onclick = () => refreshDeliveryReports();
   $('#export-delivery-analytics').onclick = () => exportDeliveryAnalyticsCsv();
   $('#delivery-age-filter').onchange = event => {
     if (deliveryOperationsData) {
@@ -618,7 +779,7 @@ async function admin() {
 
   await refreshDeliveryExceptions();
   await refreshDeliveryOperations();
-  await refreshDeliveryAnalytics();
+  await refreshDeliveryReports();
 }
 async function delivery(){const ts=await api('/delivery/tasks');$('#main').innerHTML=`<span class="eyebrow">DELIVERY WORKSPACE</span><h1>Your route today.</h1>${ts.map(t=>`<section class="panel"><h3>${esc(t.name)} × ${t.quantity}</h3><p>${esc(t.address)}</p><p>${badge(t.status)} · ${t.payment==='cod_due'?'Collect cash '+money(t.total):'Demo prepaid'}</p>${t.status==='packed'?`<button class="primary" data-start="${t.id}">Confirm pickup & start delivery</button>`:`<button class="primary" data-complete="${t.id}" data-cod="${t.payment==='cod_due'}">Complete with customer code</button><button data-failed="${t.id}">Failed attempt</button>`}</section>`).join('')||'<div class="empty">No assigned delivery tasks.</div>'}`;}
 async function warehouse(){const d=await api('/warehouse/tasks');$('#main').innerHTML='<h1>Warehouse operations</h1>'+itemTable(d.items,i=>`<button data-track="${i.id}">Track item</button> <button data-pack="${i.id}">Confirm packed</button>`)+returnCards(d.returns);}

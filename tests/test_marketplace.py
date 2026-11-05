@@ -1359,3 +1359,157 @@ def test_admin_delivery_analytics_courier_attribution_and_csv(app):
         as_text=True
     )
     assert 'delivery@example.com' in csv_response.get_data(as_text=True)
+
+
+# Phase 3.12: delivery intelligence period comparison and live risk
+def test_admin_delivery_intelligence_period_reasons_and_live_risk(app):
+    customer = login(app)
+    admin = login(app, 'admin')
+    seller = login(app, 'seller')
+    rider = login(app, 'delivery')
+
+    failed_order, _ = buy(
+        app, customer, key='intelligence-failed-order-123'
+    )
+    completed_order, _ = buy(
+        app, customer, key='intelligence-completed-order-123'
+    )
+
+    assert failed_order.status_code == 201, failed_order.json
+    assert completed_order.status_code == 201, completed_order.json
+
+    failed_id = failed_order.json['items'][0]['id']
+    completed_id = completed_order.json['items'][0]['id']
+
+    assert call(
+        app, '/seller/items/' + failed_id + '/pack',
+        'post', {}, seller
+    ).status_code == 200
+
+    assert call(
+        app, '/admin/items/' + failed_id + '/assign',
+        'post', {'courier_id': 'delivery'}, admin
+    ).status_code == 200
+
+    assert call(
+        app, '/delivery/tasks/' + failed_id,
+        'post', {'action': 'start'}, rider
+    ).status_code == 200
+
+    for reason in ('Current address issue', 'Customer unavailable'):
+        response = call(
+            app, '/delivery/tasks/' + failed_id,
+            'post', {'action': 'attempt_failed', 'reason': reason}, rider
+        )
+        assert response.status_code == 200, response.json
+
+    fulfill(app, completed_id, customer)
+
+    # Add historical events in the immediately preceding UTC day.
+    today = time.strftime('%Y-%m-%d', time.gmtime())
+    previous_event_time = int(time.time()) - 86400
+
+    with transaction(True) as db:
+        db.execute(
+            """
+            INSERT INTO audit(id,actor,action,entity,detail,created)
+            VALUES(?,?,?,?,?,?)
+            """,
+            (
+                'intelligence-previous-failure',
+                'delivery',
+                'delivery.attempt_failed',
+                'historical-item',
+                'Historical-only reason',
+                previous_event_time,
+            )
+        )
+        db.execute(
+            """
+            INSERT INTO audit(id,actor,action,entity,detail,created)
+            VALUES(?,?,?,?,?,?)
+            """,
+            (
+                'intelligence-previous-completion',
+                'delivery',
+                'delivery.complete',
+                'historical-completed-item',
+                '',
+                previous_event_time + 1,
+            )
+        )
+
+    # Non-admin access is forbidden.
+    denied = call(
+        app, '/admin/delivery-intelligence?from=' + today + '&to=' + today,
+        headers=customer
+    )
+    assert denied.status_code == 403
+
+    response = call(
+        app,
+        '/admin/delivery-intelligence?from=' + today + '&to=' + today,
+        headers=admin
+    )
+    assert response.status_code == 200, response.json
+
+    data = response.json
+
+    assert data['period'] == {
+        'from': today,
+        'to': today,
+        'days': 1,
+    }
+    assert data['previous_period']['from'] == time.strftime(
+        '%Y-%m-%d', time.gmtime(previous_event_time)
+    )
+    assert data['previous_period']['to'] == data['previous_period']['from']
+
+    comparison = data['comparison']
+    assert comparison['current'] == {
+        'successful': 1,
+        'failed_attempts': 2,
+        'failure_percent': 66.7,
+    }
+    assert comparison['previous'] == {
+        'successful': 1,
+        'failed_attempts': 1,
+        'failure_percent': 50.0,
+    }
+    assert comparison['change'] == {
+        'successful': 0,
+        'failed_attempts': 1,
+        'failure_percentage_points': 16.7,
+    }
+    assert comparison['previous_period_has_attempts'] is True
+
+    reasons = {
+        row['reason']: row
+        for row in data['failure_reasons']
+    }
+
+    assert reasons['Current address issue']['current_count'] == 1
+    assert reasons['Current address issue']['previous_count'] == 0
+    assert reasons['Current address issue']['current_share_percent'] == 50.0
+
+    assert reasons['Customer unavailable']['current_count'] == 1
+    assert reasons['Customer unavailable']['previous_count'] == 0
+
+    # A reason that disappeared from the current period remains visible.
+    assert reasons['Historical-only reason']['current_count'] == 0
+    assert reasons['Historical-only reason']['previous_count'] == 1
+    assert reasons['Historical-only reason']['previous_share_percent'] == 100.0
+    assert reasons['Historical-only reason']['share_change_percentage_points'] == -100.0
+
+    live = data['live_risk']
+    assert live['thresholds']['warning_hours'] == 24
+    assert live['thresholds']['critical_hours'] == 48
+    assert live['summary']['repeat_failure_items'] == 1
+
+    courier = next(
+        row for row in live['couriers']
+        if row['courier_id'] == 'delivery'
+    )
+    assert courier['pending_items'] == 1
+    assert courier['repeat_failure_items'] == 1
+    assert courier['critical_48h'] == 0

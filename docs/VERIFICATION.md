@@ -58,3 +58,16 @@ Verification date: 5 November 2026.
 - No schema migration was required.
 
 The report uses audit events and current item assignments. It does not integrate with external courier systems or provide live tracking. jsdom validates DOM behavior and application interactions, not visual layout across real browsers or devices. PostgreSQL CI, Docker/Compose deployment, image scanning, production load/security testing and live integrations remain separate validation tasks.
+
+## Phase 3.12 — Delivery intelligence
+
+Verification date: 5 November 2026.
+
+- Backend: all 52 pytest tests passed on the isolated SQLite test database (`52 passed`).
+- Focused delivery regression tests passed: 3 passed, covering intelligence, analytics and operations.
+- JavaScript syntax checks passed for `web/app.js` and `tests/ui-smoke.cjs`; `git diff --check` passed.
+- UI integration: all eight seeded role workspaces and existing customer, seller, warehouse, delivery, delivery exception, SLA and analytics workflows passed.
+- Intelligence coverage: equal-length current/previous period comparison, success/failure rate changes, failure-reason shares and percentage-point trends, previous-period-only reasons, live courier risk and threshold labels.
+- Existing Phase 3.11 analytics JSON and CSV endpoints remain unchanged. No schema migration was required.
+
+Historical comparisons use audit events in UTC date windows. Current pending and courier risk figures are live snapshots and must not be interpreted as historical pending counts. The risk indicators are transparent rule-based operational measures, not predictive models or carrier-confirmed delivery data. jsdom validates application behavior, not visual browser layout. Production deployment, load/security testing and live carrier integrations remain outside this phase.

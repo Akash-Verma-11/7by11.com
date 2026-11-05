@@ -116,3 +116,24 @@ Success and failure percentages use successful deliveries plus failed attempts a
 `GET /api/admin/delivery-analytics.csv` accepts the same date filters and exports courier-level performance columns: courier, email, status, assigned, successful, failed attempts, currently pending (live snapshot), repeat-failure items, success percentage, failure percentage and average completion minutes. The response is a downloadable CSV attachment.
 
 These analytics are derived from marketplace audit events and current order-item state. They are operational reporting metrics, not carrier-confirmed delivery data or live GPS information.
+
+
+## Delivery intelligence — Phase 3.12
+
+`GET /api/admin/delivery-intelligence` is admin-only and accepts the same optional `from` and `to` UTC date filters and validation rules as the Phase 3.11 delivery analytics endpoint.
+
+The response contains:
+
+- `period`: selected reporting dates and number of days.
+- `previous_period`: the immediately preceding UTC period of the same length.
+- `comparison.current` and `comparison.previous`: successful deliveries, failed attempts and failure percentage for each period.
+- `comparison.change`: absolute changes in successful deliveries and failed attempts, plus the failure-rate change in percentage points.
+- `comparison.previous_period_has_attempts`: indicates whether the previous period had any successful deliveries or failed attempts. A zero previous-period rate should be interpreted with this flag.
+- `failure_reasons`: the union of reasons found in either period, with current and previous counts, each period's share of failed attempts, and the percentage-point change in share. Reasons that occurred only in the previous period remain present with a current count of zero.
+- `live_risk`: a current operational snapshot with its generation timestamp, thresholds, summary counts and courier-level risk details.
+
+Live risk summary fields include `overdue_24h`, `critical_48h`, `repeat_failure_items` and `unassigned_packed`. Courier entries include `pending_items`, `watch_24h`, `critical_48h`, `repeat_failure_items` and `unassigned_packed`.
+
+Historical comparison metrics are calculated from delivery audit events. The previous period has the same number of UTC calendar days and ends immediately before the selected period begins. Failure-rate and reason-share changes are percentage-point differences, not relative percentage changes.
+
+Live risk reuses the delivery operations snapshot and its internal 24-hour warning and 48-hour critical thresholds. It represents current pending work, not a historical snapshot for the selected dates. The endpoint does not forecast delivery outcomes or use machine learning.

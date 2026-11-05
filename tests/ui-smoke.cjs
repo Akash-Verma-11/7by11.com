@@ -479,6 +479,25 @@ async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await delay
  if(!csvRequest || csvRequest.method!=='GET')
   throw Error('Delivery analytics CSV request was not issued correctly');
 
+ await until(
+  ()=>w.__requests.some(item =>
+    item.url.startsWith('/api/admin/delivery-intelligence?from='+todayUtc)
+  ) && d.querySelector('#delivery-intelligence-comparison')
+    ?.textContent.includes('Successful deliveries'),
+  'delivery intelligence period comparison'
+ );
+
+ const intelligencePanel=d.querySelector('.delivery-intelligence');
+ if(!intelligencePanel
+   || !intelligencePanel.querySelector('#delivery-intelligence-reasons')
+   || !intelligencePanel.querySelector('#delivery-intelligence-risks'))
+  throw Error('Delivery intelligence sections are missing');
+
+ if(!intelligencePanel.textContent.includes('Live operational snapshot')
+   || !intelligencePanel.textContent.includes('percentage points'))
+  throw Error('Delivery intelligence period/live-data labels are missing');
+
+ console.log('PASS admin delivery intelligence: period comparison, reason trends and live courier risk');
  console.log('PASS admin advanced delivery analytics: summary, courier comparison, date filter and CSV export');
 
  const slaSummary=d.querySelector('#delivery-operations-summary');
